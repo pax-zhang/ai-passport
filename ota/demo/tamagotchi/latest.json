@@ -1,10 +1,10 @@
 {
   "channel": "demo/tamagotchi",
-  "version": "0.1.0",
-  "url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-tamagotchi-v0.1.0/FoloToy-AI-Passport-demo-tamagotchi.bin",
-  "sha256": "8c5c03324a441546af9b45a6dc9ae374592ea24c705f4a613d928316d5d9c795",
-  "size": 2618784,
-  "factory_url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-tamagotchi-v0.1.0/FoloToy-AI-Passport-demo-tamagotchi-factory.bin",
-  "factory_sha256": "463237105cf306ea8e798fa4b233ba5e405bf3ffbf077eb7ef6195de44b7b7bb",
-  "factory_size": 2749856
+  "version": "0.1.1",
+  "url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-tamagotchi-v0.1.1/FoloToy-AI-Passport-demo-tamagotchi.bin",
+  "sha256": "2a677056ad34709a52f29a32e6a9760ba0da8dc4c6a5faf17361e96dd022c9f1",
+  "size": 2619616,
+  "factory_url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-tamagotchi-v0.1.1/FoloToy-AI-Passport-demo-tamagotchi-factory.bin",
+  "factory_sha256": "d9919c5a2ef5af35c3086f458404045792bc2a4c7f4b335da23993f5ed0e17ca",
+  "factory_size": 2750688
 }

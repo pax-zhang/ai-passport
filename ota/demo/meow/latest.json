@@ -1,0 +1,10 @@
+{
+  "channel": "demo/meow",
+  "version": "0.1.0",
+  "url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-meow-v0.1.0/FoloToy-AI-Passport-demo-meow.bin",
+  "sha256": "c535e4ca3a423fe1a54045a3df237950545da049bf51806fd0c549cb4535f4e8",
+  "size": 2628112,
+  "factory_url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-meow-v0.1.0/FoloToy-AI-Passport-demo-meow-factory.bin",
+  "factory_sha256": "6ce924e0678a22640d86a11e6555dde27f64ee9e41f5a037eee411c0ad800744",
+  "factory_size": 2759184
+}

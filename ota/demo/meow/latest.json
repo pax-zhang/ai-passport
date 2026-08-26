@@ -1,10 +1,10 @@
 {
   "channel": "demo/meow",
-  "version": "0.1.0",
-  "url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-meow-v0.1.0/FoloToy-AI-Passport-demo-meow.bin",
-  "sha256": "c535e4ca3a423fe1a54045a3df237950545da049bf51806fd0c549cb4535f4e8",
-  "size": 2628112,
-  "factory_url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-meow-v0.1.0/FoloToy-AI-Passport-demo-meow-factory.bin",
-  "factory_sha256": "6ce924e0678a22640d86a11e6555dde27f64ee9e41f5a037eee411c0ad800744",
-  "factory_size": 2759184
+  "version": "0.1.1",
+  "url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-meow-v0.1.1/FoloToy-AI-Passport-demo-meow.bin",
+  "sha256": "577b42881292fc6c0b5d36fd57d77f32a71e8f06d7fd14785247c96e025c6db0",
+  "size": 2628928,
+  "factory_url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-meow-v0.1.1/FoloToy-AI-Passport-demo-meow-factory.bin",
+  "factory_sha256": "cd27e363a9f6b009d4b05987abda53e0f77ccc8db08b8f88af442036bf264fb9",
+  "factory_size": 2760000
 }

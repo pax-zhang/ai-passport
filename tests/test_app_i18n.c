@@ -65,6 +65,13 @@ int main(void)
     assert(strcmp(app_str(APP_STR_MEOW_MISS), "没中") == 0);
     assert(strcmp(app_str(APP_STR_MEOW_DEX_PET), "宠物") == 0);
     assert(strcmp(app_str(APP_STR_MEOW_DEX_ITM), "道具") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_TAB_STEAL), "偷菜") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_C0), "胡萝卜") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_NO_PLANT), "无地块种植") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_NO_WEED), "无需除草") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_LIMIT), "今日偷满") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_ETA), "约%s可收") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_SOON), "即将成熟") == 0);
     assert(strcmp(app_str(APP_STR_MEOW_DEX_COL), "收藏") == 0);
     assert(strcmp(app_str(APP_STR_MEOW_AH0), "破壳") == 0);
     assert(strcmp(app_str(APP_STR_MEOW_ACH), "成就") == 0);
@@ -95,6 +102,8 @@ int main(void)
 
     app_lang_set(APP_LANG_EN);
     assert(strcmp(app_str(APP_STR_MEOW_DEX_ITM), "Items") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_TAB_STEAL), "Steal") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_C0), "Carrot") == 0);
     assert(strcmp(app_str(APP_STR_UPDATE), "Update") == 0);
     assert(strcmp(app_str(APP_STR_MEOW), "Pet") == 0);
     assert(strcmp(app_str(APP_STR_MEOW_HINT), "UP/DOWN pages  OK open") == 0);
@@ -109,6 +118,10 @@ int main(void)
     assert(strcmp(app_str(APP_STR_MEOW_LIT), "lights on") == 0);
     assert(strcmp(app_str(APP_STR_SET_CLOCK), "Set clock") == 0);
     assert(strstr(app_str(APP_STR_CLOCK_HINT), "auto-saves") != NULL);
+    assert(strcmp(app_str(APP_STR_FARM_WATER), "Water") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_NO_PLANT), "no empty plots") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_LIMIT), "daily limit") == 0);
+    assert(strcmp(app_str(APP_STR_FARM_ETA), "ready ~%s") == 0);
 
     app_lang_set((app_lang_t)99);
     assert(app_lang() == APP_LANG_EN);

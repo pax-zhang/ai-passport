@@ -63,7 +63,8 @@ int main(void)
     assert(strcmp(m.version, "0.2.0") == 0);
     assert(m.size == 1800000);
     assert(app_ota_is_newer("0.1.0", m.version));
-    assert(app_ota_channel_ok(m.channel, APP_OTA_CHANNEL));
+    assert(app_ota_channel_ok(m.channel, "demo/meow"));
+    assert(app_ota_channel_ok(APP_OTA_CHANNEL, APP_OTA_CHANNEL));
     assert(!app_ota_channel_ok(m.channel, "demo/tetris-game"));
     assert(!app_ota_channel_ok(m.channel, "main"));
 

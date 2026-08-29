@@ -1,0 +1,29 @@
+{
+  "name": "ai-passport-farm-server",
+  "private": true,
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "dev": "next dev -p 3000 --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start -p 3000 --hostname 0.0.0.0",
+    "seed": "curl -sS -X POST http://127.0.0.1:3000/api/seed",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "pm2": "pm2 start ecosystem.config.cjs",
+    "pm2:reload": "pm2 reload farm"
+  },
+  "dependencies": {
+    "mysql2": "^3.24.2",
+    "next": "^15.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

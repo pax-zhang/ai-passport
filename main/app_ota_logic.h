@@ -10,7 +10,7 @@
 #define APP_OTA_CHANNEL_MAX 48
 
 #ifndef APP_OTA_CHANNEL
-#define APP_OTA_CHANNEL "demo/meow"
+#define APP_OTA_CHANNEL "demo/farm"
 #endif
 
 #ifndef APP_OTA_MANIFEST_URL

@@ -1,8 +1,8 @@
-# FoloToy AI Passport — Meow
+# FoloToy AI Passport — 农场
 
 [English](README.md) | 简体中文
 
-**当前 `demo/meow` 分支是独立宠物游戏固件，不是 `main` 上的首页应用。** 开机直接进入 Meow，不包含通知、对讲机、天气、验证器。语言、Wi-Fi、蓝牙、时钟、屏幕、声音都在游戏里设置。Wi-Fi 和蓝牙用于「世界」里的**拜访**和**对战**（近距离蓝牙，或同一已保存局域网）。STA 上的 NTP 用来给宠物对时睡觉。
+**当前分支是独立的 QQ 农场风格游戏固件，不是 `main` 上的首页应用。** 开机直接进入农场，不包含通知、对讲机、天气、验证器。语言、Wi-Fi、蓝牙、时钟、屏幕、声音、玩家 ID 都在游戏里设置。设备固定连 `https://farm.netbiu.com`。联网同步、随机/好友偷菜、排行需要 Wi-Fi。配套 Next.js 服务端在 `server/`。
 
 游戏说明：[English](docs/APPS.md) · [简体中文](docs/APPS.zh_CN.md)
 
@@ -180,24 +180,9 @@ cc -std=c11 -Wall -Wextra -Werror -Imain \
 /tmp/test_app_i18n
 
 cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow.c main/app_meow_logic.c \
-  -o /tmp/test_app_meow
-/tmp/test_app_meow
-
-cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow_rhythm.c main/app_meow_rhythm.c \
-  -o /tmp/test_app_meow_rhythm
-/tmp/test_app_meow_rhythm
-
-cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow_run.c main/app_meow_run.c \
-  -o /tmp/test_app_meow_run
-/tmp/test_app_meow_run
-
-cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow_match.c main/app_meow_match.c \
-  -o /tmp/test_app_meow_match
-/tmp/test_app_meow_match
+  tests/test_app_farm.c main/app_farm_logic.c \
+  -o /tmp/test_app_farm
+/tmp/test_app_farm
 
 cc -std=c11 -Wall -Wextra -Werror -Imain \
   tests/test_app_ota.c main/app_ota_logic.c \
@@ -237,10 +222,13 @@ Unverified: 仍需板卡、仪器或用户确认的事项
 ```text
 components/bsp/include/  BSP 公开 API 与 bsp_pins.h 硬件事实
 components/bsp/src/      显示、按键、音频、电池、Wi-Fi、BLE、共享 I2C 实现
-main/                    最小菜单、LVGL UI 与独立硬件演示页
+main/                    农场游戏界面、逻辑与 HTTP 同步
+assets/farm/             Ardot 透明 PNG 贴纸（不要背景）
+scripts/png_to_lvgl.py   把这些 PNG 转成 LVGL RGB565A8
+server/                  Next.js + MySQL：注册、农场同步、偷菜、好友、排行
 tests/                   可脱离硬件运行的轻量逻辑测试源
 docs/                    agent 硬件指南、机上应用/设置说明与扩展文档
-docs/APPS.zh_CN.md       首页应用、设置项与 NVS 键
+docs/APPS.zh_CN.md       农场分页、设置项与 NVS 键
 sdkconfig.defaults       ESP32-C3、USB console、Flash、LVGL、Wi-Fi STA、NimBLE 默认配置
 partitions.csv           8 MB Flash 分区，双 OTA 槽各约 3.9 MB
 AGENTS.md                agent 在本仓库的编码、验证和提交规则

@@ -46,6 +46,7 @@ static lv_timer_t *s_hold_timer;
 static TaskHandle_t s_task;
 static volatile int s_req;
 static volatile bool s_scanning;
+static volatile bool s_wifi_page;
 
 static bsp_ble_peer_t s_peers[BSP_BLE_PEER_MAX];
 static int s_peer_n;
@@ -316,6 +317,24 @@ static void ota_choose(void)
     else if (s_sel == 1) app_ota_apply();
 }
 
+static void remember_current_ssid(void)
+{
+    const char *cur = bsp_wifi_ssid();
+    int i;
+    bsp_wifi_ap_t row;
+
+    if (!cur[0]) return;
+    for (i = 0; i < s_ap_n; i++) {
+        if (strcmp(s_aps[i].ssid, cur) == 0) return;
+    }
+    if (s_ap_n >= BSP_WIFI_SCAN_MAX) return;
+    memset(&row, 0, sizeof(row));
+    strlcpy(row.ssid, cur, sizeof(row.ssid));
+    memmove(&s_aps[1], &s_aps[0], (size_t)s_ap_n * sizeof(s_aps[0]));
+    s_aps[0] = row;
+    s_ap_n++;
+}
+
 static void paint(void)
 {
     if (!s_box) return;
@@ -329,12 +348,19 @@ static void paint(void)
         title = APP_STR_WIFI;
         if (!bsp_wifi_enabled()) hint = app_str(APP_STR_WIFI_OFF);
         else if (s_scanning) hint = app_str(APP_STR_SCANNING);
+        else if (s_wifi_view == WIFI_KB) hint = app_str(APP_STR_HOLD_SKIP);
         else if (bsp_wifi_state() == BSP_WIFI_CONNECTING) {
-            static char conn[40];
+            static char conn[72];
             snprintf(conn, sizeof(conn), app_str(APP_STR_CONNECTING), bsp_wifi_ssid());
             hint = conn;
         }
-        else if (s_wifi_view == WIFI_KB) hint = app_str(APP_STR_HOLD_SKIP);
+        else if (bsp_wifi_state() == BSP_WIFI_CONNECTED) {
+            static char up[72];
+            char ip[20];
+            bsp_wifi_ip(ip, sizeof(ip));
+            snprintf(up, sizeof(up), "%s  %s", bsp_wifi_ssid(), ip);
+            hint = up;
+        }
         else if (bsp_wifi_state() == BSP_WIFI_FAILED) hint = app_str(APP_STR_FAIL_PASS);
         else hint = app_str(APP_STR_OK_CHOOSE);
         paint_wifi(body, sizeof(body));
@@ -408,11 +434,16 @@ static void wifi_task(void *arg)
         if (req == 1) {
             s_req = 0;
             s_scanning = true;
-            bsp_wifi_radio_resume();
+            (void)bsp_wifi_ensure_started();
+            bsp_wifi_cancel_connect();
             int n = bsp_wifi_scan(s_aps, BSP_WIFI_SCAN_MAX);
             s_ap_n = n < 0 ? 0 : n;
+            remember_current_ssid();
             s_wifi_view = WIFI_LIST;
             s_scanning = false;
+            if (!s_wifi_page && bsp_wifi_enabled() && bsp_wifi_auto_connect()) {
+                (void)bsp_wifi_connect_saved();
+            }
         } else if (req == 2) {
             s_req = 0;
             bsp_wifi_connect(s_ssid, s_pass);
@@ -435,9 +466,11 @@ static void wifi_choose(void)
     if (!bsp_wifi_enabled() && s_sel != 0) return;
     if (s_sel == 0) {
         bool on = !bsp_wifi_enabled();
-        if (on) bsp_wifi_radio_resume();
         bsp_wifi_set_enabled(on);
-        if (on) s_req = 1;
+        if (on) {
+            (void)bsp_wifi_ensure_started();
+            s_req = 1;
+        }
         return;
     }
     if (s_sel == 1) {
@@ -593,6 +626,9 @@ static void hold_tick(lv_timer_t *t)
 
 void app_meow_set_close(void)
 {
+    bool leave_wifi = s_wifi_page;
+
+    s_wifi_page = false;
     s_req = 0;
     s_hold_btn = -1;
     s_hold_ms = 0;
@@ -609,6 +645,10 @@ void app_meow_set_close(void)
         s_box = NULL;
     }
     s_title = s_hint = s_body = NULL;
+    if (leave_wifi && !s_scanning && bsp_wifi_enabled() &&
+        bsp_wifi_auto_connect()) {
+        (void)bsp_wifi_connect_saved();
+    }
 }
 
 void app_meow_set_open(lv_obj_t *lcd, meow_set_id_t id)
@@ -653,10 +693,10 @@ void app_meow_set_open(lv_obj_t *lcd, meow_set_id_t id)
     lv_obj_set_width(s_body, w - 32);
     lv_label_set_long_mode(s_body, LV_LABEL_LONG_WRAP);
 
-    if (id == MEOW_SET_WIFI || id == MEOW_SET_OTA) {
-        bsp_wifi_radio_resume();
-    }
+    if (id == MEOW_SET_OTA) bsp_wifi_radio_resume();
+    else if (id == MEOW_SET_WIFI) (void)bsp_wifi_ensure_started();
     if (id == MEOW_SET_WIFI) {
+        s_wifi_page = true;
         if (!s_task) xTaskCreate(wifi_task, "meow_wifi", 4096, NULL, 4, &s_task);
         if (bsp_wifi_enabled()) s_req = 1;
     }
@@ -679,6 +719,14 @@ bool app_meow_set_busy(void)
     if (bsp_ble_state() == BSP_BLE_PAIRING) return true;
     if (app_ota_busy()) return true;
     return false;
+}
+
+bool app_meow_set_blocks_idle(void)
+{
+    if (app_meow_set_busy()) return true;
+    if (!s_box) return false;
+    if (s_id == MEOW_SET_SCREEN || s_id == MEOW_SET_SOUND) return false;
+    return true;
 }
 
 void app_meow_set_tick(void)

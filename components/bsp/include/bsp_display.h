@@ -5,6 +5,7 @@
 #include "esp_err.h"
 #include "esp_lcd_types.h"
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 // 初始化 SPI 总线、面板、厂商寄存器、背光 LEDC。成功后屏幕已上电但内容未定。
@@ -47,3 +48,5 @@ void bsp_lvgl_tick_enable(bool on);
 // 暂停/恢复往 LCD 刷帧。LVGL 定时器仍跑(shell/通知),只是不 SPI 传输。
 void bsp_lvgl_pause(void);
 void bsp_lvgl_resume(void);
+
+void bsp_lvgl_screenshot_emit(void (*emit)(const uint8_t *p, size_t n));

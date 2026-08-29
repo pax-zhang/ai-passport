@@ -1,8 +1,8 @@
-# FoloToy AI Passport — Meow
+# FoloToy AI Passport — Farm
 
 English | [简体中文](README.zh_CN.md)
 
-**This `demo/meow` branch is a standalone pet game, not the Home-app firmware on `main`.** It boots into Meow only. Alerts, Walkie, Weather, and TOTP are not in this image. Language, Wi-Fi, Bluetooth, clock, screen, and sound are set **inside the game**. Wi-Fi and Bluetooth are for **Visit** and **Battle** under World (nearby BLE, or the same saved LAN). NTP from STA is used for the pet’s bedtime.
+**This branch is a standalone QQ-style farm game, not the Home-app firmware on `main`.** It boots into the farm. Alerts, Walkie, Weather, and TOTP are not in this image. Language, Wi-Fi, Bluetooth, clock, screen, sound, and player ID are set **inside the game**. Devices use `https://farm.netbiu.com`. Wi-Fi is required for sync, random/friend steal, and rank. The matching Next.js server lives in `server/`.
 
 Game controls: [English](docs/APPS.md) · [简体中文](docs/APPS.zh_CN.md)
 
@@ -181,24 +181,9 @@ cc -std=c11 -Wall -Wextra -Werror -Imain \
 /tmp/test_app_i18n
 
 cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow.c main/app_meow_logic.c \
-  -o /tmp/test_app_meow
-/tmp/test_app_meow
-
-cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow_rhythm.c main/app_meow_rhythm.c \
-  -o /tmp/test_app_meow_rhythm
-/tmp/test_app_meow_rhythm
-
-cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow_run.c main/app_meow_run.c \
-  -o /tmp/test_app_meow_run
-/tmp/test_app_meow_run
-
-cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow_match.c main/app_meow_match.c \
-  -o /tmp/test_app_meow_match
-/tmp/test_app_meow_match
+  tests/test_app_farm.c main/app_farm_logic.c \
+  -o /tmp/test_app_farm
+/tmp/test_app_farm
 
 cc -std=c11 -Wall -Wextra -Werror -Imain \
   tests/test_app_ota.c main/app_ota_logic.c \
@@ -238,10 +223,13 @@ See the [AI Hardware Development Guide](docs/AI_HARDWARE_DEVELOPMENT_GUIDE.md) f
 ```text
 components/bsp/include/  Public BSP APIs and bsp_pins.h hardware facts
 components/bsp/src/      Display, button, audio, battery, Wi-Fi, BLE, and shared-I2C implementations
-main/                    Minimal menu, LVGL UI, and independent hardware demo pages
+main/                    Farm game UI, logic, and HTTP sync
+assets/farm/             Ardot transparent PNG stickers (no background)
+scripts/png_to_lvgl.py   Import those PNGs as LVGL RGB565A8
+server/                  Next.js API for register, farm sync, steal, friends, rank
 tests/                   Lightweight logic tests that can run without hardware
 docs/                    Agent hardware guide, on-device app/settings notes, and extension docs
-docs/APPS.md             Home apps, Settings pages, and NVS keys
+docs/APPS.md             Farm pages, Settings, and NVS keys
 sdkconfig.defaults       ESP32-C3, USB console, Flash, LVGL, Wi-Fi STA, NimBLE defaults
 partitions.csv           8 MB Flash layout with two ~3.9 MB OTA slots
 AGENTS.md                Coding, validation, and contribution rules for agents

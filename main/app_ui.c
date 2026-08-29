@@ -37,6 +37,18 @@ static const char *const KB_SYM[KB_N] = {
     "SPC", "DEL", "Aa", "QR", "GO", "BK",
 };
 
+static const char *const KB_ID[KB_ID_N] = {
+    "1", "2", "3", "4",
+    "5", "6", "7", "8",
+    "9", "0", "DEL", "GO",
+    "",  "BK", "",  "",
+};
+
+static bool kb_id_valid(int i)
+{
+    return i >= 0 && i < KB_ID_N && KB_ID[i][0] != 0;
+}
+
 lv_obj_t *app_ui_card(lv_obj_t *parent)
 {
     int h = (int)lv_obj_get_height(parent);
@@ -92,6 +104,30 @@ const char *const *app_kb_keys(int set)
     return KB_LOWER;
 }
 
+const char *const *app_kb_id_keys(void)
+{
+    return KB_ID;
+}
+
+void app_kb_id_move(int *sel, int delta)
+{
+    int n, dir, steps, s, t;
+
+    if (!sel || delta == 0) return;
+    n = *sel;
+    dir = delta > 0 ? 1 : -1;
+    steps = delta > 0 ? delta : -delta;
+    for (s = 0; s < steps; s++) {
+        for (t = 0; t < KB_ID_N; t++) {
+            n += dir;
+            n %= KB_ID_N;
+            if (n < 0) n += KB_ID_N;
+            if (kb_id_valid(n)) break;
+        }
+    }
+    *sel = n;
+}
+
 void app_kb_render(char *out, size_t n, const char *heading, const char *value,
                    int sel, int set)
 {
@@ -143,5 +179,27 @@ int app_kb_click(char *buf, size_t cap, int *sel, int *set)
     size_t kn = strlen(k);
     if (len + kn >= cap) return 1;
     memcpy(buf + len, k, kn + 1);
+    return 1;
+}
+
+int app_kb_id_click(char *buf, size_t cap, int sel)
+{
+    const char *k;
+    size_t len;
+
+    if (!buf || cap == 0 || !kb_id_valid(sel)) return 0;
+    k = KB_ID[sel];
+    if (strcmp(k, "DEL") == 0) {
+        len = strlen(buf);
+        if (len) buf[len - 1] = 0;
+        return 1;
+    }
+    if (strcmp(k, "BK") == 0) return 3;
+    if (strcmp(k, "GO") == 0) return 2;
+    if (k[0] < '0' || k[0] > '9' || k[1] != 0) return 0;
+    len = strlen(buf);
+    if (len >= 6 || len + 1 >= cap) return 1;
+    buf[len] = k[0];
+    buf[len + 1] = 0;
     return 1;
 }

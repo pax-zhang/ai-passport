@@ -388,6 +388,7 @@ bool app_ota_busy(void)
 bool app_ota_prompt(void)
 {
     if (s_st != APP_OTA_AVAILABLE) return false;
+    if (!wifi_ok()) return false;
     if (s_skip[0] && strcmp(s_skip, s_man.version) == 0) return false;
     return true;
 }

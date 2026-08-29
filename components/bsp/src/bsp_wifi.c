@@ -4,6 +4,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -22,6 +23,7 @@ static const char *TAG = "bsp_wifi";
 #define NVS_EN    "en"
 #define NVS_AUTO  "auto"
 #define AUTH_FAIL_LIMIT 3
+#define CONN_TIMEOUT_US 20000000LL
 
 static bool s_inited;
 static volatile bsp_wifi_state_t s_state;
@@ -39,6 +41,7 @@ static char s_ssid[BSP_WIFI_SSID_MAX + 1];
 static char s_pass[BSP_WIFI_PASS_MAX + 1];
 static SemaphoreHandle_t s_mu;
 static int s_auth_fails;
+static esp_timer_handle_t s_conn_tm;
 
 static void lock(void) {
     if (s_mu) xSemaphoreTake(s_mu, portMAX_DELAY);
@@ -125,7 +128,7 @@ static void save_flags(void) {
 
 static void apply_ps(void) {
     if (!s_started) return;
-    bool none = !s_ps || s_ps_hold > 0;
+    bool none = !s_ps || s_ps_hold > 0 || s_state == BSP_WIFI_CONNECTING;
     esp_err_t e = esp_wifi_set_ps(none ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
     if (e != ESP_OK) ESP_LOGW(TAG, "set_ps 失败: %s", esp_err_to_name(e));
 }
@@ -137,7 +140,73 @@ static void apply_sta_config(void) {
     cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
     cfg.sta.pmf_cfg.capable = true;
     cfg.sta.pmf_cfg.required = false;
-    esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    esp_err_t e = esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    if (e != ESP_OK) ESP_LOGW(TAG, "set_config 失败: %s", esp_err_to_name(e));
+}
+
+static void disarm_conn_tm(void)
+{
+    if (s_conn_tm) esp_timer_stop(s_conn_tm);
+}
+
+static void on_conn_timeout(void *arg)
+{
+    (void)arg;
+    if (s_state != BSP_WIFI_CONNECTING) return;
+    ESP_LOGW(TAG, "连接超时 ssid='%s'", s_ssid);
+    s_want_connect = false;
+    s_state = BSP_WIFI_FAILED;
+    apply_ps();
+    esp_wifi_disconnect();
+}
+
+static void arm_conn_tm(void)
+{
+    if (!s_conn_tm) {
+        const esp_timer_create_args_t a = {
+            .callback = on_conn_timeout,
+            .name = "wifi_conn",
+        };
+        if (esp_timer_create(&a, &s_conn_tm) != ESP_OK) return;
+    }
+    esp_timer_stop(s_conn_tm);
+    esp_timer_start_once(s_conn_tm, CONN_TIMEOUT_US);
+}
+
+static void begin_connect(void)
+{
+    s_auth_fails = 0;
+    s_want_connect = true;
+    s_state = BSP_WIFI_CONNECTING;
+    apply_sta_config();
+    apply_ps();
+    arm_conn_tm();
+}
+
+static void end_connect(bsp_wifi_state_t st)
+{
+    s_want_connect = (st == BSP_WIFI_CONNECTED);
+    s_state = st;
+    disarm_conn_tm();
+    apply_ps();
+}
+
+static esp_err_t start_radio(void)
+{
+    if (s_started) return ESP_OK;
+    esp_err_t e = esp_wifi_start();
+    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
+    s_started = true;
+    apply_ps();
+    return ESP_OK;
+}
+
+static void wait_sta(int ms)
+{
+    int n = ms / 50;
+    for (int i = 0; i < n && !s_sta_up; i++) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 }
 
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
@@ -150,6 +219,8 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
         s_sta_up = true;
         if (s_want_connect) {
             s_state = BSP_WIFI_CONNECTING;
+            apply_ps();
+            arm_conn_tm();
             esp_wifi_connect();
         }
         return;
@@ -163,24 +234,27 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
         uint8_t reason = ev ? ev->reason : 0;
         ESP_LOGW(TAG, "断开 reason=%u ssid='%s'", reason, s_ssid);
         if (!s_enabled || !s_want_connect) {
-            s_state = BSP_WIFI_IDLE;
+            if (s_state != BSP_WIFI_FAILED) {
+                s_state = BSP_WIFI_IDLE;
+                disarm_conn_tm();
+                apply_ps();
+            }
             return;
         }
         bool was_up = (s_state == BSP_WIFI_CONNECTED);
         if (was_up && !s_auto) {
-            s_want_connect = false;
-            s_state = BSP_WIFI_IDLE;
+            end_connect(BSP_WIFI_IDLE);
             return;
         }
         if (!should_retry(reason)) {
             if (++s_auth_fails >= AUTH_FAIL_LIMIT) {
                 ESP_LOGE(TAG, "认证失败次数过多,停止自动重连");
-                s_want_connect = false;
-                s_state = BSP_WIFI_FAILED;
+                end_connect(BSP_WIFI_FAILED);
                 return;
             }
         }
         s_state = BSP_WIFI_CONNECTING;
+        apply_ps();
         esp_wifi_connect();
         return;
     }
@@ -189,7 +263,10 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
         ESP_LOGI(TAG, "已连接 SSID='%s' ip=" IPSTR,
                  s_ssid, IP2STR(&ev->ip_info.ip));
         s_auth_fails = 0;
+        s_want_connect = true;
         s_state = BSP_WIFI_CONNECTED;
+        disarm_conn_tm();
+        apply_ps();
         lock();
         save_creds();
         unlock();
@@ -239,21 +316,17 @@ esp_err_t bsp_wifi_init(void) {
     unlock();
     if (s_enabled && s_auto && saved) {
         ESP_LOGI(TAG, "发现已存 SSID '%s',将自动连接", s_ssid);
-        s_want_connect = true;
-        s_state = BSP_WIFI_CONNECTING;
-        apply_sta_config();
+        begin_connect();
     } else {
         s_state = BSP_WIFI_IDLE;
     }
 
     if (s_enabled) {
-        e = esp_wifi_start();
+        e = start_radio();
         if (e != ESP_OK) {
             ESP_LOGE(TAG, "esp_wifi_start 失败: %s", esp_err_to_name(e));
             return e;
         }
-        s_started = true;
-        apply_ps();
     }
 
     s_inited = true;
@@ -288,18 +361,11 @@ int bsp_wifi_scan(bsp_wifi_ap_t *out, int max) {
     if (!s_inited || !s_enabled || !out || max <= 0) return -1;
     if (max > BSP_WIFI_SCAN_MAX) max = BSP_WIFI_SCAN_MAX;
 
-    if (!s_started) {
-        esp_err_t st = esp_wifi_start();
-        if (st != ESP_OK && st != ESP_ERR_INVALID_STATE) {
-            ESP_LOGW(TAG, "扫描前 start 失败: %s", esp_err_to_name(st));
-            return -1;
-        }
-        s_started = true;
-        apply_ps();
+    if (start_radio() != ESP_OK) {
+        ESP_LOGW(TAG, "扫描前 start 失败");
+        return -1;
     }
-    for (int i = 0; i < 30 && !s_sta_up; i++) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    wait_sta(3000);
     if (!s_sta_up) {
         ESP_LOGW(TAG, "扫描时 STA 未就绪");
         return -1;
@@ -332,12 +398,8 @@ int bsp_wifi_scan(bsp_wifi_ap_t *out, int max) {
     }
     if (e != ESP_OK) {
         ESP_LOGW(TAG, "scan_start 失败: %s", esp_err_to_name(e));
-        s_want_connect = restore;
-        if (restore && s_ssid[0] && s_enabled) {
-            s_state = BSP_WIFI_CONNECTING;
-            apply_sta_config();
-            esp_wifi_connect();
-        }
+        if (restore && s_ssid[0] && s_enabled) begin_connect();
+        if (s_want_connect && s_sta_up) esp_wifi_connect();
         return -1;
     }
     for (int i = 0; i < 100 && !s_scan_done; i++) {
@@ -346,12 +408,8 @@ int bsp_wifi_scan(bsp_wifi_ap_t *out, int max) {
     if (!s_scan_done) {
         esp_wifi_scan_stop();
         ESP_LOGW(TAG, "扫描超时");
-        s_want_connect = restore;
-        if (restore && s_ssid[0] && s_enabled) {
-            s_state = BSP_WIFI_CONNECTING;
-            apply_sta_config();
-            esp_wifi_connect();
-        }
+        if (restore && s_ssid[0] && s_enabled) begin_connect();
+        if (s_want_connect && s_sta_up) esp_wifi_connect();
         return -1;
     }
 
@@ -359,12 +417,8 @@ int bsp_wifi_scan(bsp_wifi_ap_t *out, int max) {
     uint16_t got = sizeof(raw) / sizeof(raw[0]);
     e = esp_wifi_scan_get_ap_records(&got, raw);
     if (e != ESP_OK) {
-        s_want_connect = restore;
-        if (restore && s_ssid[0] && s_enabled) {
-            s_state = BSP_WIFI_CONNECTING;
-            apply_sta_config();
-            esp_wifi_connect();
-        }
+        if (restore && s_ssid[0] && s_enabled) begin_connect();
+        if (s_want_connect && s_sta_up) esp_wifi_connect();
         return -1;
     }
 
@@ -411,11 +465,11 @@ int bsp_wifi_scan(bsp_wifi_ap_t *out, int max) {
         out[j + 1] = key;
     }
 
-    s_want_connect = restore;
     if (restore && s_enabled && s_ssid[0] && s_state != BSP_WIFI_CONNECTED) {
-        s_state = BSP_WIFI_CONNECTING;
-        apply_sta_config();
-        esp_wifi_connect();
+        begin_connect();
+        if (s_sta_up) esp_wifi_connect();
+    } else {
+        s_want_connect = restore;
     }
 
     ESP_LOGI(TAG, "扫描到 %d 个网络", count);
@@ -423,33 +477,63 @@ int bsp_wifi_scan(bsp_wifi_ap_t *out, int max) {
 }
 
 esp_err_t bsp_wifi_connect(const char *ssid, const char *password) {
-    if (!s_inited || !s_started || !ssid || !ssid[0]) return ESP_ERR_INVALID_ARG;
+    if (!s_inited || !s_enabled || !ssid || !ssid[0]) return ESP_ERR_INVALID_ARG;
     if (!password) password = "";
     if (strlen(ssid) > BSP_WIFI_SSID_MAX) return ESP_ERR_INVALID_ARG;
     if (strlen(password) > BSP_WIFI_PASS_MAX) return ESP_ERR_INVALID_ARG;
 
+    if (s_radio_held) s_radio_held = false;
+    esp_err_t e = start_radio();
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "连接前 start 失败: %s", esp_err_to_name(e));
+        return e;
+    }
+    wait_sta(3000);
+    if (!s_sta_up) {
+        ESP_LOGW(TAG, "连接时 STA 未就绪");
+        end_connect(BSP_WIFI_FAILED);
+        return ESP_ERR_INVALID_STATE;
+    }
+
     lock();
     strlcpy(s_ssid, ssid, sizeof(s_ssid));
     strlcpy(s_pass, password, sizeof(s_pass));
-    s_auth_fails = 0;
-    s_want_connect = true;
-    s_state = BSP_WIFI_CONNECTING;
-    apply_sta_config();
+    begin_connect();
     unlock();
 
     ESP_LOGI(TAG, "开始连接 SSID='%s'", s_ssid);
     esp_wifi_disconnect();
     vTaskDelay(pdMS_TO_TICKS(80));
-    return esp_wifi_connect();
+    e = esp_wifi_connect();
+    if (e != ESP_OK) ESP_LOGW(TAG, "connect 失败: %s", esp_err_to_name(e));
+    return e;
+}
+
+esp_err_t bsp_wifi_connect_saved(void)
+{
+    if (!s_inited || !s_enabled || !s_ssid[0]) return ESP_ERR_INVALID_STATE;
+    if (s_state == BSP_WIFI_CONNECTED) {
+        s_want_connect = true;
+        return ESP_OK;
+    }
+    if (s_state == BSP_WIFI_CONNECTING) return ESP_OK;
+    if (s_radio_held) s_radio_held = false;
+    esp_err_t e = start_radio();
+    if (e != ESP_OK) return e;
+    begin_connect();
+    if (s_sta_up) {
+        e = esp_wifi_connect();
+        if (e != ESP_OK) ESP_LOGW(TAG, "connect_saved 失败: %s", esp_err_to_name(e));
+    }
+    return ESP_OK;
 }
 
 esp_err_t bsp_wifi_forget(void) {
     if (!s_inited) return ESP_ERR_INVALID_STATE;
     lock();
-    s_want_connect = false;
     s_ssid[0] = 0;
     s_pass[0] = 0;
-    s_state = BSP_WIFI_IDLE;
+    end_connect(BSP_WIFI_IDLE);
     erase_creds();
     unlock();
     esp_wifi_disconnect();
@@ -497,34 +581,27 @@ esp_err_t bsp_wifi_set_enabled(bool on) {
     unlock();
 
     if (on) {
-        if (s_auto && s_ssid[0]) {
-            s_want_connect = true;
-            s_auth_fails = 0;
-            s_state = BSP_WIFI_CONNECTING;
-            apply_sta_config();
-        }
+        if (s_auto && s_ssid[0]) begin_connect();
         if (s_radio_held) {
             s_resume_connect = s_want_connect;
             ESP_LOGI(TAG, "WiFi 已开启(射频暂停中,按键唤醒后上电)");
             return ESP_OK;
         }
-        esp_err_t e = esp_wifi_start();
-        if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+        esp_err_t e = start_radio();
+        if (e != ESP_OK) {
             ESP_LOGE(TAG, "wifi start: %s", esp_err_to_name(e));
             return e;
         }
-        s_started = true;
-        apply_ps();
-        if (s_want_connect) esp_wifi_connect();
+        if (s_want_connect && s_sta_up) esp_wifi_connect();
         ESP_LOGI(TAG, "WiFi 已开启");
         return ESP_OK;
     }
 
-    s_want_connect = false;
-    s_state = BSP_WIFI_IDLE;
+    end_connect(BSP_WIFI_IDLE);
     esp_wifi_disconnect();
     esp_wifi_stop();
     s_started = false;
+    s_sta_up = false;
     ESP_LOGI(TAG, "WiFi 已关闭");
     return ESP_OK;
 }
@@ -540,11 +617,8 @@ esp_err_t bsp_wifi_set_auto_connect(bool on) {
     save_flags();
     unlock();
     if (on && s_enabled && s_started && s_ssid[0] && s_state != BSP_WIFI_CONNECTED) {
-        s_want_connect = true;
-        s_auth_fails = 0;
-        s_state = BSP_WIFI_CONNECTING;
-        apply_sta_config();
-        esp_wifi_connect();
+        begin_connect();
+        if (s_sta_up) esp_wifi_connect();
     }
     return ESP_OK;
 }
@@ -584,6 +658,7 @@ esp_err_t bsp_wifi_radio_suspend(void)
     if (!s_started) return ESP_OK;
     s_want_connect = false;
     s_state = BSP_WIFI_IDLE;
+    disarm_conn_tm();
     esp_wifi_disconnect();
     esp_wifi_stop();
     s_started = false;
@@ -598,20 +673,35 @@ esp_err_t bsp_wifi_radio_resume(void)
     if (!s_radio_held) return ESP_OK;
     s_radio_held = false;
     if (!s_enabled) return ESP_OK;
-    if (s_resume_connect && s_ssid[0]) {
-        s_want_connect = true;
-        s_auth_fails = 0;
-        s_state = BSP_WIFI_CONNECTING;
-        apply_sta_config();
-    }
-    esp_err_t e = esp_wifi_start();
-    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+    if (s_resume_connect && s_ssid[0]) begin_connect();
+    esp_err_t e = start_radio();
+    if (e != ESP_OK) {
         ESP_LOGE(TAG, "wifi resume start: %s", esp_err_to_name(e));
         return e;
     }
-    s_started = true;
-    apply_ps();
-    if (s_want_connect) esp_wifi_connect();
+    if (s_want_connect && s_sta_up) esp_wifi_connect();
     ESP_LOGI(TAG, "WiFi 射频恢复");
     return ESP_OK;
+}
+
+esp_err_t bsp_wifi_ensure_started(void)
+{
+    if (!s_inited || !s_enabled) return ESP_ERR_INVALID_STATE;
+    if (s_radio_held) {
+        s_radio_held = false;
+        s_resume_connect = false;
+    }
+    return start_radio();
+}
+
+void bsp_wifi_cancel_connect(void)
+{
+    if (s_state == BSP_WIFI_CONNECTED) return;
+    s_want_connect = false;
+    disarm_conn_tm();
+    if (s_state == BSP_WIFI_CONNECTING) {
+        s_state = BSP_WIFI_IDLE;
+        apply_ps();
+        esp_wifi_disconnect();
+    }
 }

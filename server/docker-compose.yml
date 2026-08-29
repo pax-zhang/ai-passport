@@ -1,0 +1,21 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: farm
+      MYSQL_USER: farm
+      MYSQL_PASSWORD: farm
+      MYSQL_ROOT_PASSWORD: farm
+    ports:
+      - "3306:3306"
+    volumes:
+      - farm_mysql:/var/lib/mysql
+      - ./lib/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ufarm", "-pfarm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  farm_mysql:

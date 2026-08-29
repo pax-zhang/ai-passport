@@ -73,3 +73,9 @@ void bsp_wifi_ps_release(void);
 // 息屏时停射频,不改 NVS 开关。只在按键唤醒后 resume,ANCS 亮屏不重连。
 esp_err_t bsp_wifi_radio_suspend(void);
 esp_err_t bsp_wifi_radio_resume(void);
+// 只上电 STA,不自动连。Wi-Fi 设置页扫描前用这个,避免一进页就停在「正在连接」。
+esp_err_t bsp_wifi_ensure_started(void);
+// 用 NVS/内存里已有的凭据后台重连。已连上或正在连则原样返回。
+esp_err_t bsp_wifi_connect_saved(void);
+// 放弃当前未完成的连接,便于设置页扫描。已连上的网络不动。
+void bsp_wifi_cancel_connect(void);

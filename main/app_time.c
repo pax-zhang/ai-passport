@@ -18,11 +18,13 @@
 static const char *TAG = "app_time";
 static bool s_ntp;
 static bool s_synced;
+static bool s_ready;
 
 static void on_sync(struct timeval *tv)
 {
     (void)tv;
     s_synced = true;
+    s_ready = true;
     ESP_LOGI(TAG, "NTP synced");
 }
 
@@ -32,6 +34,7 @@ void app_time_init(void)
     tzset();
     s_ntp = false;
     s_synced = false;
+    s_ready = false;
 }
 
 void app_time_ntp_restart(void)
@@ -135,9 +138,15 @@ void app_time_set(int year, int month, int day, int hour, int minute)
     if (ts == (time_t)-1) return;
     struct timeval tv = { .tv_sec = ts, .tv_usec = 0 };
     settimeofday(&tv, NULL);
+    s_ready = true;
 }
 
 bool app_time_ntp_synced(void)
 {
     return s_synced;
+}
+
+bool app_time_ready(void)
+{
+    return s_ready;
 }

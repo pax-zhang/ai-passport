@@ -5,3 +5,10 @@ managed_components/
 dependencies.lock
 .vscode/
 /FoloToy-AI-Passport-*.bin
+server/node_modules/
+server/.next/
+server/data/
+server/.env
+.publisher-venv/
+publish/
+assets/farm/_ardot_export/

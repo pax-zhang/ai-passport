@@ -5,10 +5,23 @@
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "src/display/lv_display_private.h"
 
 static const char *TAG = "bsp_lvgl";
 
 static lv_display_t *s_disp;
+static lv_display_flush_cb_t s_flush;
+static void (*s_shot_emit)(const uint8_t *p, size_t n);
+
+static void shot_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
+{
+    if (s_shot_emit && area && px_map) {
+        uint32_t w = (uint32_t)(area->x2 - area->x1 + 1);
+        uint32_t h = (uint32_t)(area->y2 - area->y1 + 1);
+        s_shot_emit(px_map, (size_t)w * (size_t)h * 2u);
+    }
+    if (s_flush) s_flush(disp, area, px_map);
+}
 
 lv_display_t *bsp_lvgl_init(void) {
     if (s_disp) return s_disp;
@@ -43,9 +56,20 @@ lv_display_t *bsp_lvgl_init(void) {
     };
     s_disp = lvgl_port_add_disp(&dc);
     if (!s_disp) { ESP_LOGE(TAG, "lvgl_port_add_disp 失败"); return NULL; }
+    s_flush = s_disp->flush_cb;
+    s_disp->flush_cb = shot_flush;
 
     ESP_LOGI(TAG, "LVGL 就绪");
     return s_disp;
+}
+
+void bsp_lvgl_screenshot_emit(void (*emit)(const uint8_t *p, size_t n))
+{
+    if (!s_disp || !emit) return;
+    s_shot_emit = emit;
+    lv_obj_invalidate(lv_screen_active());
+    lv_refr_now(s_disp);
+    s_shot_emit = NULL;
 }
 
 bool bsp_lvgl_lock(int timeout_ms) { return lvgl_port_lock(timeout_ms); }

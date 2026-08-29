@@ -244,7 +244,7 @@ static uint32_t s_passkey;
 static bool s_pair_confirm;
 static uint16_t s_pair_conn = BLE_HS_CONN_HANDLE_NONE;
 static bool s_wait_notify;  // 新绑定后提示打开分享通知;广播仍可连接
-static bool s_enabled = true;
+static bool s_enabled = false;
 static bool s_quiet = true;
 static bool s_want_adv = true;   // 用户/策略是否希望广播
 static bool s_user_adv;          // 用户刚按 Advertise,暂时忽略 quiet
@@ -299,7 +299,7 @@ static int peer_bond_count(void) {
 
 static void load_ble_flags(void) {
     nvs_handle_t h;
-    s_enabled = true;
+    s_enabled = false;
     s_quiet = true;
     if (nvs_open(NVS_BLE_NS, NVS_READONLY, &h) != ESP_OK) return;
     uint8_t v;

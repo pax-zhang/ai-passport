@@ -1,0 +1,10 @@
+{
+  "channel": "demo/farm",
+  "version": "0.1.0",
+  "url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-farm-v0.1.0/FoloToy-AI-Passport-demo-farm.bin",
+  "sha256": "16080a5d6e7c70ea8cc16b91d9b25e65bbe6cf912f42d4e73dcf63c2c516ec4e",
+  "size": 2372448,
+  "factory_url": "https://github.com/pax-zhang/ai-passport/releases/download/demo-farm-v0.1.0/FoloToy-AI-Passport-demo-farm-factory.bin",
+  "factory_sha256": "aa9ea64b399062b0059dcbb6679c8a191cd73015612f4d0a2c12211a7d9a6e85",
+  "factory_size": 2503520
+}

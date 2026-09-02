@@ -37,12 +37,14 @@ typedef struct {
 static lv_obj_t *s_scr, *s_hdr, *s_main, *s_batt, *s_link_bar;
 static lv_timer_t *s_timer, *s_home_lock_timer;
 static esp_timer_handle_t s_wake_timer;
+static esp_timer_handle_t s_ble_keep_timer;
 static page_t s_stack[STACK_MAX];
 static int s_sp = -1;
 static app_modal_t s_modal[APP_MODAL_MAX];
 static int s_modal_n;
 static volatile bool s_asleep;
 static volatile bool s_ble_wake_pending;
+static volatile bool s_ble_resume_pending;
 static bool s_lock_skip;
 static uint32_t s_idle_ms;
 static uint32_t s_resource_ms;
@@ -147,6 +149,10 @@ static void sleep_now(void)
     bsp_button_sleep_gpio(true);
     bsp_lvgl_tick_enable(false);
     bsp_pm_set_sleeping(true);
+    if (s_ble_keep_timer) {
+        esp_timer_stop(s_ble_keep_timer);
+        esp_timer_start_periodic(s_ble_keep_timer, 5000000);
+    }
 }
 
 void app_shell_wake(void)
@@ -154,6 +160,8 @@ void app_shell_wake(void)
     s_idle_ms = 0;
     if (!s_asleep) return;
     s_asleep = false;
+    if (s_ble_keep_timer) esp_timer_stop(s_ble_keep_timer);
+    s_ble_resume_pending = false;
     bsp_pm_set_sleeping(false);
     bsp_button_sleep_gpio(false);
     bsp_lvgl_tick_enable(true);
@@ -179,14 +187,22 @@ static void tick(lv_timer_t *t)
         s_ble_idle_ms = 0;
         app_shell_wake();
     }
+    if (s_ble_resume_pending) {
+        s_ble_resume_pending = false;
+        if (bsp_ble_enabled() && !bsp_ble_synced()) bsp_ble_resume();
+        if (s_asleep) {
+            bsp_lvgl_tick_enable(false);
+            return;
+        }
+    }
     app_time_tick();
     app_prefs_tick();
     app_web_poll();
     app_notif_poll();
     app_notif_tick(s_asleep ? 1000 : 250);
-    if (!s_asleep && !app_lock_visible() && !app_notif_visible() &&
-        !app_web_keep_awake() && bsp_ble_enabled() && !bsp_ble_synced()) {
-        s_ble_idle_ms += 250;
+    if (!app_notif_visible() && !app_web_keep_awake() &&
+        bsp_ble_enabled() && !bsp_ble_synced()) {
+        s_ble_idle_ms += s_asleep ? 1000 : 250;
         if (s_ble_idle_ms >= 5000) {
             s_ble_idle_ms = 0;
             bsp_ble_resume();
@@ -360,6 +376,14 @@ static void wake_timer_cb(void *arg)
     bsp_lvgl_tick_enable(true);
 }
 
+static void ble_keep_cb(void *arg)
+{
+    (void)arg;
+    if (!s_asleep || !bsp_ble_enabled() || bsp_ble_synced()) return;
+    s_ble_resume_pending = true;
+    bsp_lvgl_tick_enable(true);
+}
+
 static void on_ble_activity(void)
 {
     if (!app_shell_asleep() || !s_wake_timer) return;
@@ -482,6 +506,11 @@ void app_shell_start(void)
         .name = "shell_wake",
     };
     if (!s_wake_timer) esp_timer_create(&wake_args, &s_wake_timer);
+    const esp_timer_create_args_t keep_args = {
+        .callback = ble_keep_cb,
+        .name = "ble_keep",
+    };
+    if (!s_ble_keep_timer) esp_timer_create(&keep_args, &s_ble_keep_timer);
     app_shell_open_ex(app_ancs_enter, app_ancs_exit, app_ancs_key, APP_PAGE_BLE);
     header_refresh();
     s_timer = lv_timer_create(tick, 250, NULL);

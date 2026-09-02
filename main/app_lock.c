@@ -152,9 +152,11 @@ void app_lock_show(void)
 void app_lock_hide(void)
 {
     if (!s_box) return;
+    bool was = s_shown;
     s_shown = false;
     lv_obj_add_flag(s_box, LV_OBJ_FLAG_HIDDEN);
     app_shell_page_obscure(false);
+    if (was) app_ancs_resume();
 }
 
 bool app_lock_visible(void)

@@ -2,6 +2,7 @@
 // NimBLE 外设 + ANCS GATT 客户端。流程对齐 ESP-IDF nimble/ble_ancs,去掉控制台配对。
 // 多连接上限 2:一台走 ANCS(iPhone),另一路 HID 或 BLE 对讲;绑定互不影响。
 #include "bsp_ble.h"
+#include "bsp_pm.h"
 #include "bsp_wifi.h"
 
 #include "esp_heap_caps.h"
@@ -1667,6 +1668,7 @@ static esp_err_t stack_start(void)
 
     nimble_port_freertos_init(host_task);
     s_stack = true;
+    bsp_pm_touch();
     ESP_LOGI(TAG, "BLE 栈已启动 max_conn=%d heap=%u largest=%u",
              BLE_CONN_MAX,
              (unsigned)esp_get_free_heap_size(),
@@ -1709,6 +1711,7 @@ static void stack_stop(void)
     s_stack = false;
     set_state(BSP_BLE_IDLE);
     apply_coex_ps();
+    bsp_pm_touch();
     ESP_LOGI(TAG, "BLE 栈已释放 heap=%u largest=%u",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));

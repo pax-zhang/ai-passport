@@ -13,10 +13,12 @@ static bool s_perf;
 #if CONFIG_PM_ENABLE
 static void apply(void)
 {
+    bool ble = bsp_ble_stack_up();
+    // NimBLE 在 40MHz DFS 下会掉连接;栈在跑时下限锁 80,也不进浅睡。
     esp_pm_config_t cfg = {
         .max_freq_mhz = 160,
-        .min_freq_mhz = (s_sleeping || !s_perf) ? 40 : 80,
-        .light_sleep_enable = s_sleeping && !bsp_ble_stack_up(),
+        .min_freq_mhz = ble ? 80 : ((s_sleeping || !s_perf) ? 40 : 80),
+        .light_sleep_enable = s_sleeping && !ble,
     };
     esp_err_t e = esp_pm_configure(&cfg);
     if (e != ESP_OK && cfg.min_freq_mhz == 40) {
@@ -61,6 +63,14 @@ void bsp_pm_set_perf(bool on)
     if (s_perf == on) return;
     s_perf = on;
     if (s_sleeping) return;
+#if CONFIG_PM_ENABLE
+    apply();
+#endif
+}
+
+void bsp_pm_touch(void)
+{
+    if (!s_inited) return;
 #if CONFIG_PM_ENABLE
     apply();
 #endif

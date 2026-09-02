@@ -3,9 +3,9 @@
   "protocol": "FAP_SCREENSHOT_V1",
   "source": "serial-framebuffer",
   "screenshot": "ai-passport-screen.png",
-  "sha256": "ba12d166042d98e26ad93ab92d8867aa775903919ac85c91936ea8549cdc640d",
+  "sha256": "6c7067c70be697b8eff7199f31f7c6718632eb628ceb28760ce3ef2ad0aae5c7",
   "width": 240,
   "height": 320,
   "port": "/dev/cu.usbmodem2101",
-  "capturedAt": 1788326893
+  "capturedAt": 1788358269
 }

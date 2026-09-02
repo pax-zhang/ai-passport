@@ -85,6 +85,7 @@ bool app_settings_open_now(void);
 void app_ancs_enter(lv_obj_t *p);
 void app_ancs_exit(void);
 void app_ancs_key(bsp_btn_t btn, bsp_btn_ev_t ev);
+void app_ancs_resume(void);
 
 void app_hw_enter(lv_obj_t *p);
 void app_hw_exit(void);

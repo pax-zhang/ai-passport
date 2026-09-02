@@ -89,6 +89,7 @@ static int s_rule_i, s_field, s_op, s_join;
 static int s_focus, s_csel, s_del_i;
 static bool s_del_rule;
 static bool s_reading;
+static bool s_acts;
 static bool s_eat_click;
 static int s_act_sel;
 static uint8_t s_edit_prio;
@@ -830,7 +831,8 @@ static void paint_recent(void)
     }
     if (s_hint) {
         lv_label_set_text(s_hint, rec == 0 ? app_str(APP_STR_HINT_SETUP)
-                          : s_reading ? app_str(APP_STR_HINT_DETAIL)
+                          : s_reading ? app_str(s_acts ? APP_STR_HINT_DETAIL
+                                                       : APP_STR_HINT_CARD_ACT)
                                       : app_str(APP_STR_HINT_OPEN_CARD));
     }
 
@@ -841,12 +843,15 @@ static void paint_recent(void)
     }
 
     if (s_reading) {
-        int ah = style_act_h();
-        int ag = style_act_gap();
-        int act_h = ACT_N * ah + (ACT_N - 1) * ag;
-        int card_h = LIST_H - act_h - (ag ? ag : 0);
-        if (card_h < 72) card_h = 72;
         int sy = s_vis[0].box ? (int)lv_obj_get_scroll_y(s_vis[0].box) : 0;
+        int card_h = LIST_H;
+        if (s_acts) {
+            int ah = style_act_h();
+            int ag = style_act_gap();
+            int act_h = ACT_N * ah + (ACT_N - 1) * ag;
+            card_h = LIST_H - act_h - (ag ? ag : 0);
+            if (card_h < 72) card_h = 72;
+        }
         fill_vis(0, 0, card_h, app_notif_store_at(app_notif_hist(), s_sel), true, s_sel);
         if (s_vis[0].box) {
             lv_obj_add_flag(s_vis[0].box, LV_OBJ_FLAG_SCROLLABLE);
@@ -854,10 +859,16 @@ static void paint_recent(void)
             lv_obj_set_scrollbar_mode(s_vis[0].box, LV_SCROLLBAR_MODE_AUTO);
             lv_obj_scroll_to_y(s_vis[0].box, sy, LV_ANIM_OFF);
         }
-        int y = card_h + (ag ? ag : 0);
-        fill_act(0, y, s_act_sel == 0, app_str(APP_STR_ACT_CLOSE), false);
-        fill_act(1, y + ah + ag, s_act_sel == 1, app_str(APP_STR_KEEP_UNREAD), false);
-        fill_act(2, y + (ah + ag) * 2, s_act_sel == 2, app_str(APP_STR_TOTP_DELETE), false);
+        if (s_acts) {
+            int ah = style_act_h();
+            int ag = style_act_gap();
+            int y = card_h + (ag ? ag : 0);
+            fill_act(0, y, s_act_sel == 0, app_str(APP_STR_ACT_BACK_LIST), false);
+            fill_act(1, y + ah + ag, s_act_sel == 1, app_str(APP_STR_KEEP_UNREAD), false);
+            fill_act(2, y + (ah + ag) * 2, s_act_sel == 2, app_str(APP_STR_TOTP_DELETE), false);
+        } else {
+            acts_hide();
+        }
         vis_hide_from(1);
         return;
     }
@@ -1102,6 +1113,10 @@ static bool ancs_back(void)
         s_sel = s_del_rule ? edit_n() - 1 : s_del_i;
         break;
     default:
+        if (s_acts) {
+            s_acts = false;
+            break;
+        }
         if (s_reading) {
             s_reading = false;
             break;
@@ -1128,6 +1143,7 @@ void app_ancs_enter(lv_obj_t *p)
     s_del_i = 0;
     s_del_rule = false;
     s_reading = false;
+    s_acts = false;
     s_act_sel = 0;
     s_custom[0] = 0;
     s_name[0] = 0;
@@ -1159,6 +1175,20 @@ void app_ancs_exit(void)
     memset(s_menu_rows, 0, sizeof(s_menu_rows));
     memset(s_vis, 0, sizeof(s_vis));
     s_reading = false;
+    s_acts = false;
+}
+
+void app_ancs_resume(void)
+{
+    if (!s_page) return;
+    s_view = VIEW_RECENT;
+    s_reading = false;
+    s_acts = false;
+    s_act_sel = 0;
+    s_sel = 0;
+    int rec = recent_n();
+    if (rec > 0) app_notif_mark_read(s_sel);
+    paint();
 }
 
 void app_ancs_key(bsp_btn_t btn, bsp_btn_ev_t ev)
@@ -1250,6 +1280,7 @@ void app_ancs_key(bsp_btn_t btn, bsp_btn_ev_t ev)
                     lv_obj_scroll_by(box, 0, -dir * 28, LV_ANIM_OFF);
                     return;
                 }
+                if (!s_acts) return;
                 s_act_sel += dir;
                 if (s_act_sel < 0) s_act_sel = ACT_N - 1;
                 if (s_act_sel >= ACT_N) s_act_sel = 0;
@@ -1277,20 +1308,30 @@ void app_ancs_key(bsp_btn_t btn, bsp_btn_ev_t ev)
             return;
         }
         if (s_reading) {
+            if (!s_acts) {
+                s_acts = true;
+                s_act_sel = 0;
+                paint();
+                return;
+            }
             if (s_act_sel == 1) {
                 app_notif_mark_unread(s_sel);
                 s_reading = false;
+                s_acts = false;
             } else if (s_act_sel == 2) {
                 app_notif_hist_remove(s_sel);
                 s_reading = false;
+                s_acts = false;
                 if (s_sel >= recent_n()) s_sel = recent_n() ? recent_n() - 1 : 0;
             } else {
                 s_reading = false;
+                s_acts = false;
             }
             paint();
             return;
         }
         s_reading = true;
+        s_acts = false;
         s_act_sel = 0;
         app_notif_mark_read(s_sel);
         paint();

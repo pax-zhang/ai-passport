@@ -75,26 +75,18 @@ void app_time_lock_date(char *out, size_t n)
     localtime_r(&now, &t);
     int w = t.tm_wday;
     if (w < 0 || w > 6) w = 0;
-    static const char *const WD_EN[] = {
-        "Sunday", "Monday", "Tuesday", "Wednesday",
-        "Thursday", "Friday", "Saturday",
-    };
-    static const char *const WD_ZH[] = {
-        "星期日", "星期一", "星期二", "星期三",
-        "星期四", "星期五", "星期六",
-    };
-    static const char *const MON_EN[] = {
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December",
-    };
-    int mon = t.tm_mon;
-    if (mon < 0 || mon > 11) mon = 0;
     if (app_lang() == APP_LANG_ZH) {
-        snprintf(out, n, "%d年%d月%d日 %s",
-                 t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, WD_ZH[w]);
+        static const char *const WD[] = {
+            "日", "一", "二", "三", "四", "五", "六",
+        };
+        snprintf(out, n, "%04d.%02d.%02d 周%s",
+                 t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, WD[w]);
     } else {
-        snprintf(out, n, "%s, %s %d, %d",
-                 WD_EN[w], MON_EN[mon], t.tm_mday, t.tm_year + 1900);
+        static const char *const WD[] = {
+            "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT",
+        };
+        snprintf(out, n, "%04d.%02d.%02d %s",
+                 t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, WD[w]);
     }
 }
 
@@ -104,7 +96,7 @@ void app_time_lock_clock(char *out, size_t n)
     time_t now = time(NULL);
     struct tm t;
     localtime_r(&now, &t);
-    snprintf(out, n, "%d:%02d", t.tm_hour, t.tm_min);
+    snprintf(out, n, "%02d:%02d", t.tm_hour, t.tm_min);
 }
 
 void app_time_get(int *year, int *month, int *day, int *hour, int *minute)
@@ -140,4 +132,13 @@ void app_time_set(int year, int month, int day, int hour, int minute)
 bool app_time_ntp_synced(void)
 {
     return s_synced;
+}
+
+bool app_time_valid(void)
+{
+    if (s_synced) return true;
+    time_t now = time(NULL);
+    struct tm t;
+    localtime_r(&now, &t);
+    return t.tm_year + 1900 >= 2024;
 }

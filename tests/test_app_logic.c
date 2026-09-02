@@ -2,8 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "app_logic.h"
+#include "app_notif_rule.h"
 
-static app_notif_item_t make_item(const char *title, const char *msg, uint8_t prio)
+static app_notif_item_t make_item(const char *title, const char *msg,
+                                  app_alert_t alert)
 {
     app_notif_item_t it;
     memset(&it, 0, sizeof(it));
@@ -17,7 +19,7 @@ static app_notif_item_t make_item(const char *title, const char *msg, uint8_t pr
         if (n >= sizeof(it.message)) n = sizeof(it.message) - 1;
         memcpy(it.message, msg, n);
     }
-    it.prio = prio;
+    it.alert = alert;
     return it;
 }
 
@@ -44,34 +46,16 @@ int main(void)
     assert(app_notif_show_subtitle("Mom", "Family"));
     assert(app_notif_show_subtitle("", "Family"));
 
-    app_kw_t kws[3];
-    memset(kws, 0, sizeof(kws));
-    assert(app_kw_match("hello", kws, 0) == APP_PRIO_NORMAL);
-    assert(app_kw_match("hello", kws, 3) == -1);
-
-    strcpy(kws[0].text, "code");
-    kws[0].prio = APP_PRIO_NORMAL;
-    strcpy(kws[1].text, "otp");
-    kws[1].prio = APP_PRIO_HIGH;
-    assert(app_kw_match("your CODE is 1", kws, 2) == APP_PRIO_NORMAL);
-    assert(app_kw_match("OTP 99", kws, 2) == APP_PRIO_HIGH);
-    assert(app_kw_match("code and otp", kws, 2) == APP_PRIO_HIGH);
-    assert(app_kw_match("nothing", kws, 2) == -1);
-
-    strcpy(kws[2].text, "\xE9\xAA\x8C\xE8\xAF\x81\xE7\xA0\x81");
-    kws[2].prio = APP_PRIO_HIGH;
-    assert(app_kw_match("\xE9\xAA\x8C\xE8\xAF\x81\xE7\xA0\x81 12", kws, 3) == APP_PRIO_HIGH);
-
     app_notif_q_t q;
     app_notif_q_init(&q);
     assert(app_notif_q_count(&q) == 0);
     assert(app_notif_q_front(&q) == NULL);
-    app_notif_item_t a = make_item("a", "one", APP_PRIO_NORMAL);
+    app_notif_item_t a = make_item("a", "one", APP_ALERT_POPUP);
     strcpy(a.subtitle, "sub");
     strcpy(a.app_name, "Mail");
     strcpy(a.date, "20140915T173018");
     assert(app_notif_q_push(&q, &a));
-    app_notif_item_t b = make_item("b", "two", APP_PRIO_HIGH);
+    app_notif_item_t b = make_item("b", "two", APP_ALERT_URGENT);
     assert(app_notif_q_push(&q, &b));
     assert(app_notif_q_count(&q) == 2);
     assert(strcmp(app_notif_q_front(&q)->title, "a") == 0);
@@ -80,7 +64,7 @@ int main(void)
     assert(strcmp(app_notif_q_front(&q)->date, "20140915T173018") == 0);
     app_notif_q_pop(&q);
     assert(strcmp(app_notif_q_front(&q)->title, "b") == 0);
-    assert(app_notif_q_front(&q)->prio == APP_PRIO_HIGH);
+    assert(app_notif_q_front(&q)->alert == APP_ALERT_URGENT);
     app_notif_q_pop(&q);
     assert(app_notif_q_count(&q) == 0);
 
@@ -88,125 +72,11 @@ int main(void)
         char title[8];
         title[0] = (char)('A' + i);
         title[1] = 0;
-        app_notif_item_t it = make_item(title, "m", APP_PRIO_NORMAL);
+        app_notif_item_t it = make_item(title, "m", APP_ALERT_POPUP);
         app_notif_q_push(&q, &it);
     }
     assert(app_notif_q_count(&q) == APP_NOTIF_Q);
     assert(app_notif_q_front(&q)->title[0] == 'C');
-
-    app_log_t log;
-    app_log_init(&log);
-    assert(app_log_count(&log) == 0);
-    assert(app_log_at(&log, 0) == NULL);
-    assert(!app_log_push(&log, NULL));
-
-    app_log_item_t rec;
-    memset(&rec, 0, sizeof(rec));
-    strcpy(rec.app_id, "com.tencent.xin");
-    strcpy(rec.app_name, "WeChat");
-    strcpy(rec.title, "Hi");
-    strcpy(rec.message, "hello");
-    strcpy(rec.date, "20260822T140300");
-    rec.category = 4;
-    assert(app_log_push(&log, &rec));
-
-    memset(&rec, 0, sizeof(rec));
-    strcpy(rec.app_id, "com.apple.MobileSMS");
-    strcpy(rec.title, "code");
-    rec.category = 4;
-    assert(app_log_push(&log, &rec));
-
-    memset(&rec, 0, sizeof(rec));
-    strcpy(rec.app_id, "com.tencent.xin");
-    strcpy(rec.app_name, "WeChat");
-    strcpy(rec.title, "Two");
-    rec.category = 6;
-    assert(app_log_push(&log, &rec));
-
-    assert(app_log_count(&log) == 3);
-    assert(strcmp(app_log_at(&log, 0)->title, "Two") == 0);
-    assert(strcmp(app_log_at(&log, 2)->title, "Hi") == 0);
-    assert(strcmp(app_log_app_key(app_log_at(&log, 1)), "com.apple.MobileSMS") == 0);
-
-    char label[24];
-    app_log_app_label(app_log_at(&log, 0), label, sizeof(label));
-    assert(strcmp(label, "WeChat") == 0);
-    app_log_app_label(app_log_at(&log, 1), label, sizeof(label));
-    assert(strcmp(label, "MobileSMS") == 0);
-
-    app_log_group_t groups[8];
-    int gn = app_log_apps(&log, groups, 8);
-    assert(gn == 2);
-    assert(strcmp(groups[0].app_id, "com.tencent.xin") == 0);
-    assert(groups[0].count == 2);
-    assert(strcmp(groups[1].app_id, "com.apple.MobileSMS") == 0);
-    assert(groups[1].count == 1);
-
-    gn = app_log_cats(&log, groups, 8);
-    assert(gn == 2);
-    assert(groups[0].category == 6 && groups[0].count == 1);
-    assert(groups[1].category == 4 && groups[1].count == 2);
-
-    int idx[8];
-    assert(app_log_match_app(&log, "com.tencent.xin", idx, 8) == 2);
-    assert(idx[0] == 0 && idx[1] == 2);
-    assert(app_log_match_cat(&log, 4, idx, 8) == 2);
-
-    app_log_t rm;
-    app_log_init(&rm);
-    for (int i = 0; i < 5; i++) {
-        memset(&rec, 0, sizeof(rec));
-        rec.title[0] = (char)('A' + i);
-        rec.title[1] = 0;
-        app_log_push(&rm, &rec);
-    }
-    assert(app_log_at(&rm, 0)->title[0] == 'E');
-    assert(app_log_remove(&rm, 2));
-    assert(app_log_count(&rm) == 4);
-    assert(app_log_at(&rm, 0)->title[0] == 'E');
-    assert(app_log_at(&rm, 1)->title[0] == 'D');
-    assert(app_log_at(&rm, 2)->title[0] == 'B');
-    assert(app_log_at(&rm, 3)->title[0] == 'A');
-    assert(app_log_remove(&rm, 0));
-    assert(app_log_at(&rm, 0)->title[0] == 'D');
-    assert(app_log_remove(&rm, 2));
-    assert(app_log_count(&rm) == 2);
-    assert(app_log_at(&rm, 0)->title[0] == 'D');
-    assert(app_log_at(&rm, 1)->title[0] == 'B');
-    assert(!app_log_remove(&rm, 2));
-    assert(app_log_remove(&rm, 0));
-    assert(app_log_remove(&rm, 0));
-    assert(app_log_count(&rm) == 0);
-    assert(!app_log_remove(&rm, 0));
-
-    app_log_init(&rm);
-    for (int i = 0; i < APP_LOG_N + 2; i++) {
-        memset(&rec, 0, sizeof(rec));
-        rec.title[0] = (char)('A' + (i % 26));
-        rec.title[1] = 0;
-        app_log_push(&rm, &rec);
-    }
-    char newest = app_log_at(&rm, 0)->title[0];
-    char oldest = app_log_at(&rm, APP_LOG_N - 1)->title[0];
-    assert(app_log_remove(&rm, 0));
-    assert(app_log_count(&rm) == APP_LOG_N - 1);
-    assert(app_log_at(&rm, 0)->title[0] != newest);
-    assert(app_log_remove(&rm, app_log_count(&rm) - 1));
-    assert(app_log_count(&rm) == APP_LOG_N - 2);
-    assert(app_log_at(&rm, app_log_count(&rm) - 1)->title[0] != oldest);
-
-    for (int i = 0; i < APP_LOG_N + 3; i++) {
-        memset(&rec, 0, sizeof(rec));
-        rec.title[0] = (char)('A' + (i % 26));
-        rec.category = (uint8_t)(i % 3);
-        app_log_push(&log, &rec);
-    }
-    assert(app_log_count(&log) == APP_LOG_N);
-    assert(app_log_at(&log, 0)->title[0] == (char)('A' + ((APP_LOG_N + 2) % 26)));
-
-    app_log_clear(&log);
-    assert(app_log_count(&log) == 0);
-    assert(app_log_apps(&log, groups, 8) == 0);
 
     uint8_t key[32];
     int kn = app_b32_decode("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", key, sizeof(key));
@@ -245,7 +115,7 @@ int main(void)
     memset(&acct, 0, sizeof(acct));
     assert(app_totp_ingest(" jbswy3dpehpk3pxp ", &acct, true));
     assert(strcmp(acct.secret, "JBSWY3DPEHPK3PXP") == 0);
-    assert(acct.digits == 6 && acct.period == 30);
+    assert(acct.digits == 0 && acct.period == 0);
 
     memset(&acct, 0, sizeof(acct));
     assert(app_totp_ingest(
@@ -369,6 +239,178 @@ int main(void)
 
     app_dlog_clear(&dlog);
     assert(app_dlog_count(&dlog) == 0);
+
+    assert(app_dnd_in_range(21, 21, 8));
+    assert(app_dnd_in_range(7, 21, 8));
+    assert(!app_dnd_in_range(8, 21, 8));
+    assert(!app_dnd_in_range(20, 21, 8));
+    assert(!app_dnd_in_range(21, 21, 21));
+    assert(app_dnd_in_range(13, 13, 15));
+    assert(!app_dnd_in_range(15, 13, 15));
+
+    app_notif_ctx_t nctx = {
+        .app_id = "com.apple.MobileSMS",
+        .app_name = "Messages",
+        .title = "Your code is 1234",
+        .subtitle = "",
+        .message = "",
+        .category = 4,
+    };
+    app_kw_t rules[4];
+    memset(rules, 0, sizeof(rules));
+    // 无规则时落到默认档,不再是隐式静默
+    assert(app_notif_decide(&nctx, rules, 0, false, APP_ALERT_POPUP) ==
+           APP_ALERT_POPUP);
+    assert(app_notif_decide(&nctx, rules, 0, false, APP_ALERT_SILENT) ==
+           APP_ALERT_SILENT);
+    assert(app_notif_decide(&nctx, rules, 0, false, APP_ALERT_DROP) ==
+           APP_ALERT_DROP);
+    assert(app_notif_decide(NULL, rules, 4, false, APP_ALERT_URGENT) ==
+           APP_ALERT_URGENT);
+
+    strcpy(rules[0].text, "any:code");
+    rules[0].prio = APP_ALERT_POPUP;
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_DROP) ==
+           APP_ALERT_POPUP);
+    rules[0].prio = APP_ALERT_DROP;
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_POPUP) ==
+           APP_ALERT_DROP);
+    rules[0].prio = APP_ALERT_POPUP;
+
+    strcpy(rules[0].text, "app:*MobileSMS&any:*code*");
+    rules[0].prio = APP_ALERT_URGENT;
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_SILENT) ==
+           APP_ALERT_URGENT);
+
+    strcpy(rules[0].text, "cat:6");
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_SILENT) ==
+           APP_ALERT_SILENT);
+
+    strcpy(rules[0].text, "cat:4,6");
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_SILENT) ==
+           APP_ALERT_URGENT);
+
+    strcpy(rules[0].text, "any:*code*|sub:*code*");
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_SILENT) ==
+           APP_ALERT_URGENT);
+
+    strcpy(rules[0].text, "!app:*MobileSMS");
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_SILENT) ==
+           APP_ALERT_SILENT);
+
+    strcpy(rules[0].text, "title:*123?&!msg:*spam*");
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_SILENT) ==
+           APP_ALERT_URGENT);
+
+    nctx.message = "spam offer";
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_SILENT) ==
+           APP_ALERT_SILENT);
+    nctx.message = "";
+
+    // 首条命中优先:屏蔽规则排在放行规则前面才拦得住
+    memset(rules, 0, sizeof(rules));
+    strcpy(rules[0].text, "app:*MobileSMS");
+    rules[0].prio = APP_ALERT_SILENT;
+    strcpy(rules[1].text, "any:*code*");
+    rules[1].prio = APP_ALERT_URGENT;
+    assert(app_notif_decide(&nctx, rules, 2, false, APP_ALERT_POPUP) ==
+           APP_ALERT_SILENT);
+
+    app_kw_t swapped[2] = { rules[1], rules[0] };
+    assert(app_notif_decide(&nctx, swapped, 2, false, APP_ALERT_POPUP) ==
+           APP_ALERT_URGENT);
+
+    // 空规则跳过,不影响后面的命中
+    memset(rules[0].text, 0, sizeof(rules[0].text));
+    assert(app_notif_decide(&nctx, rules, 2, false, APP_ALERT_POPUP) ==
+           APP_ALERT_URGENT);
+
+    // 勿扰:弹窗降级为静默仍进历史,强提醒不受影响
+    assert(app_notif_decide(&nctx, rules, 2, true, APP_ALERT_POPUP) ==
+           APP_ALERT_URGENT);
+    memset(rules, 0, sizeof(rules));
+    strcpy(rules[0].text, "any:*code*");
+    rules[0].prio = APP_ALERT_POPUP;
+    assert(app_notif_decide(&nctx, rules, 1, true, APP_ALERT_SILENT) ==
+           APP_ALERT_SILENT);
+    assert(app_notif_decide(&nctx, rules, 0, true, APP_ALERT_POPUP) ==
+           APP_ALERT_SILENT);
+
+    // 越界档位夹到最高档,防止旧数据把 prio 写飞
+    rules[0].prio = 200;
+    assert(app_notif_decide(&nctx, rules, 1, false, APP_ALERT_SILENT) ==
+           APP_ALERT_URGENT);
+
+    // 旧版本迁移:0/1 两档升成弹窗/强提醒,未命中默认档补成静默保留原行为
+    app_kw_t old_rules[2];
+    memset(old_rules, 0, sizeof(old_rules));
+    strcpy(old_rules[0].text, "any:code");
+    old_rules[0].prio = 0;
+    strcpy(old_rules[1].text, "any:otp");
+    old_rules[1].prio = 1;
+    uint8_t def = APP_ALERT_POPUP;
+    app_notif_rules_upgrade(old_rules, 2, &def);
+    assert(old_rules[0].prio == APP_ALERT_POPUP);
+    assert(old_rules[1].prio == APP_ALERT_URGENT);
+    assert(def == APP_ALERT_SILENT);
+    app_notif_rules_upgrade(NULL, 0, NULL);
+
+    // 迁移后行为等价于老的「无命中即屏蔽」
+    assert(app_notif_decide(&nctx, old_rules, 2, false, (app_alert_t)def) ==
+           APP_ALERT_POPUP);
+    nctx.title = "nothing here";
+    assert(app_notif_decide(&nctx, old_rules, 2, false, (app_alert_t)def) ==
+           APP_ALERT_SILENT);
+    nctx.title = "Your code is 1234";
+
+    app_notif_item_t call;
+    memset(&call, 0, sizeof(call));
+    call.category = APP_CAT_INCOMING;
+    call.flags = APP_NOTIF_FLAG_POS | APP_NOTIF_FLAG_NEG;
+    strcpy(call.pos_label, "Answer");
+    strcpy(call.neg_label, "Decline");
+    app_notif_act_t acts[APP_NOTIF_ACT_MAX];
+    int an = app_notif_acts(&call, acts, APP_NOTIF_ACT_MAX);
+    assert(an == 2);
+    assert(acts[0].kind == APP_NOTIF_ACT_POS);
+    assert(strcmp(acts[0].label, "Answer") == 0);
+    assert(acts[1].kind == APP_NOTIF_ACT_NEG);
+    assert(app_notif_act_default(acts, an, APP_CAT_INCOMING) == 0);
+
+    app_notif_item_t sms;
+    memset(&sms, 0, sizeof(sms));
+    sms.category = 4;
+    sms.flags = APP_NOTIF_FLAG_NEG;
+    strcpy(sms.neg_label, "Clear");
+    an = app_notif_acts(&sms, acts, APP_NOTIF_ACT_MAX);
+    assert(an == 2);
+    assert(acts[0].kind == APP_NOTIF_ACT_CLOSE);
+    assert(acts[1].kind == APP_NOTIF_ACT_NEG);
+    assert(app_notif_act_default(acts, an, 4) == 0);
+
+    app_notif_item_t plain;
+    memset(&plain, 0, sizeof(plain));
+    an = app_notif_acts(&plain, acts, APP_NOTIF_ACT_MAX);
+    assert(an == 1);
+    assert(acts[0].kind == APP_NOTIF_ACT_CLOSE);
+    assert(app_notif_act_default(acts, an, 0) == 0);
+
+    app_notif_q_t aq;
+    app_notif_q_init(&aq);
+    app_notif_item_t xa = make_item("keep", "m", APP_ALERT_POPUP);
+    xa.uid = 1;
+    app_notif_item_t xb = make_item("drop", "m", APP_ALERT_POPUP);
+    xb.uid = 2;
+    app_notif_item_t xc = make_item("keep2", "m", APP_ALERT_POPUP);
+    xc.uid = 3;
+    app_notif_q_push(&aq, &xa);
+    app_notif_q_push(&aq, &xb);
+    app_notif_q_push(&aq, &xc);
+    app_notif_q_drop_uid(&aq, 2);
+    assert(app_notif_q_count(&aq) == 2);
+    assert(strcmp(app_notif_q_front(&aq)->title, "keep") == 0);
+    app_notif_q_pop(&aq);
+    assert(strcmp(app_notif_q_front(&aq)->title, "keep2") == 0);
 
     return 0;
 }

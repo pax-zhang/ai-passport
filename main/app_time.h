@@ -11,4 +11,5 @@ void app_time_lock_clock(char *out, size_t n);
 void app_time_set(int year, int month, int day, int hour, int minute);
 void app_time_get(int *year, int *month, int *day, int *hour, int *minute);
 bool app_time_ntp_synced(void);
+bool app_time_valid(void);
 void app_time_ntp_restart(void);

@@ -10,7 +10,9 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "host/ble_att.h"
+#include "host/ble_gatt.h"
 #include "host/ble_hs.h"
+#include "host/ble_hs_id.h"
 #include "host/ble_store.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
@@ -19,9 +21,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
-#include "nvs_flash.h"
 #include "os/os_mbuf.h"
 #include "sdkconfig.h"
+#include "host/ble_hs_mbuf.h"
+#include "services/bas/ble_svc_bas.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "services/dis/ble_svc_dis.h"
@@ -32,29 +35,41 @@
 static const char *TAG = "bsp_ble";
 
 #define EVT_ADDED        0
+#define EVT_MODIFIED     1
+#define EVT_REMOVED      2
 #define EVT_FLAG_PRE     (1 << 2)
+#define EVT_FLAG_POS     (1 << 3)
+#define EVT_FLAG_NEG     (1 << 4)
 #define CAT_INCOMING     1
 #define CMD_GET_ATTRS    0
 #define CMD_GET_APP_ATTRS 1
+#define CMD_PERFORM      2
 #define ATTR_APP_ID      0
 #define ATTR_TITLE       1
 #define ATTR_SUBTITLE    2
 #define ATTR_MESSAGE     3
 #define ATTR_DATE        5
+#define ATTR_POS_LABEL   6
+#define ATTR_NEG_LABEL   7
 #define ATTR_APP_NAME    0
 
 #define DATA_BUF_MAX     336
 #define TITLE_REQ_MAX    48
 #define SUBTITLE_REQ_MAX 48
 #define MSG_REQ_MAX      128
+#define LABEL_REQ_MAX    24
+#define RM_N             8
+#define CANCEL_N         4
 #define APP_CACHE_N      8
 #define APP_NAME_WAIT_US 600000
 #define BLE_CONN_MAX     CONFIG_BT_NIMBLE_MAX_CONNECTIONS
 #define ADV_FAST_US      (30LL * 1000000)
 #define ADV_FAST_MIN     BLE_GAP_ADV_FAST_INTERVAL1_MIN
 #define ADV_FAST_MAX     BLE_GAP_ADV_FAST_INTERVAL1_MAX
-#define ADV_SLOW_MIN     1600   /* 1000 ms, 单位 0.625 ms */
-#define ADV_SLOW_MAX     1920   /* 1200 ms */
+#define ADV_SLOW_MIN     320    /* 200 ms, 单位 0.625 ms */
+#define ADV_SLOW_MAX     480    /* 300 ms */
+#define ADV_FIXED_BYTES  16     /* Flags + Appearance + HID UUID */
+#define ADV_NAME_MAX     (31 - ADV_FIXED_BYTES)
 
 #define SUB_IDLE  0
 #define SUB_NS    1
@@ -82,23 +97,43 @@ static const ble_uuid16_t UUID_GAP_NAME = BLE_UUID16_INIT(0x2A00);
 #define HID_APPEARANCE  0x03C1
 #define HID_UUID16      0x1812
 
-// HID 1.11, RemoteWake | NormallyConnectable. iOS 用这个判断能否保持键盘绑定。
+#define HID_CHR_IN   (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY | \
+                      BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC)
+#define HID_CHR_OUT  (BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | \
+                      BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_READ_ENC | \
+                      BLE_GATT_CHR_F_WRITE_ENC)
+#define HID_CC_VOL_UP    0x00E9
+#define HID_CC_VOL_DOWN  0x00EA
+#define HID_CC_PLAY      0x00CD
+#define HID_CC_NEXT      0x00B5
+#define HID_CC_PREV      0x00B6
+
 static const uint8_t s_hid_info[4] = { 0x11, 0x01, 0x00, 0x03 };
-static const uint8_t s_rpt_ref_in[2] = { 0x01, 0x01 };   // report id 1, input
-static const uint8_t s_rpt_ref_out[2] = { 0x01, 0x02 };  // report id 1, output
-static uint8_t s_hid_input[7];   // modifier + reserved + 5 keys, 对齐下方 report map
+static const uint8_t s_rpt_ref_in[2] = { 0x01, 0x01 };
+static const uint8_t s_rpt_ref_out[2] = { 0x01, 0x02 };
+static const uint8_t s_rpt_ref_cc[2] = { 0x02, 0x01 };
+static uint8_t s_hid_input[8];
+static uint8_t s_hid_cc[2];
 static uint8_t s_hid_output;
 static uint8_t s_hid_proto = 1;
-// ESP-IDF HID keyboard map: 7-byte input + 1-byte LED output, Report ID 1.
+static uint16_t s_hid_kb_handle;
+static uint16_t s_hid_cc_handle;
+static uint8_t s_hid_rel_cc;
+static esp_timer_handle_t s_hid_rel_timer;
+static void hid_release_cb(void *arg);
 static const uint8_t s_hid_map[] = {
     0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x85, 0x01,
     0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00,
     0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
-    0x95, 0x01, 0x75, 0x08, 0x81, 0x03,
+    0x95, 0x01, 0x75, 0x08, 0x81, 0x01,
     0x95, 0x05, 0x75, 0x01, 0x05, 0x08, 0x19, 0x01,
-    0x29, 0x05, 0x91, 0x02, 0x95, 0x01, 0x75, 0x03, 0x91, 0x03,
-    0x95, 0x05, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65,
+    0x29, 0x05, 0x91, 0x02, 0x95, 0x01, 0x75, 0x03, 0x91, 0x01,
+    0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65,
     0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00,
+    0xC0,
+    0x05, 0x0C, 0x09, 0x01, 0xA1, 0x01, 0x85, 0x02,
+    0x15, 0x00, 0x26, 0xFF, 0x03, 0x19, 0x00, 0x2A, 0xFF, 0x03,
+    0x75, 0x10, 0x95, 0x01, 0x81, 0x00,
     0xC0,
 };
 
@@ -127,6 +162,16 @@ static int hid_in_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ct
     (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
         return os_mbuf_append(ctxt->om, s_hid_input, sizeof(s_hid_input));
+    }
+    return 0;
+}
+
+static int hid_cc_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn;
+    (void)attr;
+    (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        return os_mbuf_append(ctxt->om, s_hid_cc, sizeof(s_hid_cc));
     }
     return 0;
 }
@@ -183,9 +228,10 @@ static const struct ble_gatt_svc_def s_hid_svcs[] = {
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE,
             },
             {
-                .uuid = BLE_UUID16_DECLARE(0x2A4D),  // Input Report
+                .uuid = BLE_UUID16_DECLARE(0x2A4D),
                 .access_cb = hid_in_access,
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .flags = HID_CHR_IN,
+                .val_handle = &s_hid_kb_handle,
                 .descriptors = (struct ble_gatt_dsc_def[]) {
                     {
                         .uuid = BLE_UUID16_DECLARE(0x2908),
@@ -197,9 +243,24 @@ static const struct ble_gatt_svc_def s_hid_svcs[] = {
                 },
             },
             {
-                .uuid = BLE_UUID16_DECLARE(0x2A4D),  // Output Report (LEDs)
+                .uuid = BLE_UUID16_DECLARE(0x2A4D),
+                .access_cb = hid_cc_access,
+                .flags = HID_CHR_IN,
+                .val_handle = &s_hid_cc_handle,
+                .descriptors = (struct ble_gatt_dsc_def[]) {
+                    {
+                        .uuid = BLE_UUID16_DECLARE(0x2908),
+                        .att_flags = BLE_ATT_F_READ,
+                        .access_cb = hid_dsc_access,
+                        .arg = (void *)s_rpt_ref_cc,
+                    },
+                    { 0 },
+                },
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(0x2A4D),
                 .access_cb = hid_out_access,
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+                .flags = HID_CHR_OUT,
                 .descriptors = (struct ble_gatt_dsc_def[]) {
                     {
                         .uuid = BLE_UUID16_DECLARE(0x2908),
@@ -230,12 +291,16 @@ typedef struct {
     bool hold;           // 新绑定后断开,让主机显示详情
     bool unpair;         // 断开后只删这个对端
     bool svc_seen;       // 已看到 ANCS 服务,避免 EDONE 误重试
+    bool hid_kb;
+    bool hid_cc;
     int bonds_at_connect;
     uint8_t disc_tries;
 } ble_link_t;
 
 static bool s_inited;
 static bool s_stack;
+static bool s_synced;
+static TickType_t s_stack_tick;
 static volatile bsp_ble_state_t s_state;
 static char s_name[BSP_BLE_NAME_MAX + 1];
 static uint8_t s_own_addr_type;
@@ -245,7 +310,10 @@ static bool s_pair_confirm;
 static uint16_t s_pair_conn = BLE_HS_CONN_HANDLE_NONE;
 static bool s_wait_notify;  // 新绑定后提示打开分享通知;广播仍可连接
 static bool s_enabled = true;
-static bool s_quiet = true;
+static bool s_quiet = false;
+static bool s_paired_ok;
+static uint8_t s_rnd[6];
+static bool s_have_rnd;
 static bool s_want_adv = true;   // 用户/策略是否希望广播
 static bool s_user_adv;          // 用户刚按 Advertise,暂时忽略 quiet
 static bool s_fast_adv;
@@ -257,6 +325,7 @@ static uint8_t s_scan_mfg_n;
 static void (*s_activity_cb)(void);
 static void (*s_gap_cb)(void *event);
 static int s_app_conns;
+static bool s_forget_all_pending;
 
 static uint8_t s_data[DATA_BUF_MAX];
 static uint16_t s_data_len;
@@ -266,12 +335,22 @@ static esp_timer_handle_t s_disc_timer;
 static esp_timer_handle_t s_adv_timer;
 static esp_timer_handle_t s_app_timer;
 static esp_timer_handle_t s_fast_timer;
+static bool s_adv_fast_run;
 
-static bsp_ble_notif_t s_notif;
-static bool s_notif_fresh;
+// 通知队列。iPhone 会连发,单槽会丢中间态。
+#define NOTIF_Q_N 4
+static bsp_ble_notif_t s_notif_q[NOTIF_Q_N];
+static uint8_t s_notif_head, s_notif_n;
 static uint8_t s_parse_cat;
+static uint8_t s_parse_flags;
+static uint8_t s_parse_event;
+static uint16_t s_parse_conn;
 static bsp_ble_notif_t s_pending;
 static bool s_pending_valid;
+static uint32_t s_rm[RM_N];
+static uint8_t s_rm_head, s_rm_n;
+static uint32_t s_cancel[CANCEL_N];
+static uint8_t s_cancel_n;
 
 typedef struct {
     char id[BSP_BLE_APP_ID_MAX + 1];
@@ -300,21 +379,65 @@ static int peer_bond_count(void) {
 static void load_ble_flags(void) {
     nvs_handle_t h;
     s_enabled = true;
-    s_quiet = true;
+    s_quiet = false;
+    s_paired_ok = false;
+    s_have_rnd = false;
     if (nvs_open(NVS_BLE_NS, NVS_READONLY, &h) != ESP_OK) return;
     uint8_t v;
     if (nvs_get_u8(h, "en", &v) == ESP_OK) s_enabled = v != 0;
-    if (nvs_get_u8(h, "quiet", &v) == ESP_OK) s_quiet = v != 0;
+    if (nvs_get_u8(h, "stop_adv", &v) == ESP_OK) s_quiet = v != 0;
+    if (nvs_get_u8(h, "paired", &v) == ESP_OK) s_paired_ok = v != 0;
+    size_t n = sizeof(s_rnd);
+    if (nvs_get_blob(h, "id5", s_rnd, &n) == ESP_OK && n == sizeof(s_rnd)) s_have_rnd = true;
     nvs_close(h);
 }
 
 static void save_ble_flags(void) {
     nvs_handle_t h;
     if (nvs_open(NVS_BLE_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_u8(h, "en", s_enabled ? 1 : 0);
-    nvs_set_u8(h, "quiet", s_quiet ? 1 : 0);
-    nvs_commit(h);
+    esp_err_t e = nvs_set_u8(h, "en", s_enabled ? 1 : 0);
+    if (e == ESP_OK) e = nvs_set_u8(h, "stop_adv", s_quiet ? 1 : 0);
+    if (e == ESP_OK) e = nvs_set_u8(h, "paired", s_paired_ok ? 1 : 0);
+    if (e == ESP_OK) {
+        if (s_have_rnd) e = nvs_set_blob(h, "id5", s_rnd, sizeof(s_rnd));
+        else {
+            e = nvs_erase_key(h, "id5");
+            if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+        }
+    }
+    if (e == ESP_OK) {
+        e = nvs_erase_key(h, "id4");
+        if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+    }
+    if (e == ESP_OK) {
+        e = nvs_erase_key(h, "rid");
+        if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+    }
+    if (e == ESP_OK) e = nvs_erase_key(h, "quiet");
+    if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+    if (e == ESP_OK) e = nvs_commit(h);
     nvs_close(h);
+    if (e != ESP_OK) ESP_LOGE(TAG, "保存 BLE 标志失败: %s", esp_err_to_name(e));
+}
+
+static void mark_paired(void) {
+    if (s_paired_ok) return;
+    s_paired_ok = true;
+    save_ble_flags();
+}
+
+static int set_static_rnd(const uint8_t rnd[6]) {
+    int rc = ble_hs_id_set_rnd(rnd);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "set_rnd rc=%d", rc);
+        return rc;
+    }
+    s_own_addr_type = BLE_OWN_ADDR_RANDOM;
+    memcpy(s_rnd, rnd, sizeof(s_rnd));
+    s_have_rnd = true;
+    snprintf(s_name, sizeof(s_name), "Passport-%02X%02X", s_rnd[1], s_rnd[0]);
+    ble_svc_gap_device_name_set(s_name);
+    return 0;
 }
 
 static void fmt_addr(char *dst, size_t n, const ble_addr_t *a) {
@@ -347,9 +470,17 @@ static void load_pnames(void) {
 static void save_pnames(void) {
     nvs_handle_t h;
     if (nvs_open(NVS_BLE_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_blob(h, "pnames", s_pnames, sizeof(s_pnames[0]) * (size_t)s_pname_n);
-    nvs_commit(h);
+    esp_err_t e = nvs_set_blob(h, "pnames", s_pnames,
+                               sizeof(s_pnames[0]) * (size_t)s_pname_n);
+    if (e == ESP_OK) e = nvs_commit(h);
     nvs_close(h);
+    if (e != ESP_OK) ESP_LOGE(TAG, "保存设备名失败: %s", esp_err_to_name(e));
+}
+
+static void clear_pnames(void) {
+    s_pname_n = 0;
+    memset(s_pnames, 0, sizeof(s_pnames));
+    save_pnames();
 }
 
 static int pname_find(const ble_addr_t *a) {
@@ -370,6 +501,8 @@ static void remember_name(const ble_addr_t *a, const char *name) {
         else i = 0;
         s_pnames[i].type = a->type;
         memcpy(s_pnames[i].addr, a->val, 6);
+    } else if (strcmp(s_pnames[i].name, name) == 0) {
+        return;
     }
     strlcpy(s_pnames[i].name, name, sizeof(s_pnames[i].name));
     save_pnames();
@@ -474,6 +607,46 @@ static void copy_attr(char *dst, size_t cap, const uint8_t *src, uint16_t len) {
     dst[len] = 0;
 }
 
+static void push_removed(uint32_t uid) {
+    if (s_rm_n == RM_N) {
+        s_rm_head = (uint8_t)((s_rm_head + 1) % RM_N);
+        s_rm_n--;
+    }
+    s_rm[(s_rm_head + s_rm_n) % RM_N] = uid;
+    s_rm_n++;
+}
+
+static void cancel_uid(uint32_t uid) {
+    for (int i = 0; i < s_cancel_n; i++) {
+        if (s_cancel[i] == uid) return;
+    }
+    if (s_cancel_n < CANCEL_N) {
+        s_cancel[s_cancel_n++] = uid;
+        return;
+    }
+    memmove(s_cancel, s_cancel + 1, (CANCEL_N - 1) * sizeof(s_cancel[0]));
+    s_cancel[CANCEL_N - 1] = uid;
+}
+
+static bool uid_cancelled(uint32_t uid) {
+    for (int i = 0; i < s_cancel_n; i++) {
+        if (s_cancel[i] == uid) return true;
+    }
+    return false;
+}
+
+static ble_link_t *link_ancs(uint16_t conn) {
+    ble_link_t *l = link_find(conn);
+    if (l && l->cp && l->sub_phase == SUB_OK) return l;
+    for (int i = 0; i < BLE_CONN_MAX; i++) {
+        if (s_link[i].conn != BLE_HS_CONN_HANDLE_NONE &&
+            s_link[i].cp && s_link[i].sub_phase == SUB_OK) {
+            return &s_link[i];
+        }
+    }
+    return NULL;
+}
+
 static bool cache_get(const char *id, char *name, size_t n) {
     if (!id || !id[0] || !name || n == 0) return false;
     for (int i = 0; i < APP_CACHE_N; i++) {
@@ -502,19 +675,52 @@ static void cache_put(const char *id, const char *name) {
     s_app_cache_next = (uint8_t)((s_app_cache_next + 1) % APP_CACHE_N);
 }
 
+// 同一 UID 的更新覆盖队列里的旧条目,其余追加;满了丢最旧的。
+static void notif_q_push(const bsp_ble_notif_t *n) {
+    for (uint8_t i = 0; i < s_notif_n; i++) {
+        uint8_t idx = (uint8_t)((s_notif_head + i) % NOTIF_Q_N);
+        if (s_notif_q[idx].uid == n->uid) {
+            s_notif_q[idx] = *n;
+            return;
+        }
+    }
+    if (s_notif_n == NOTIF_Q_N) {
+        s_notif_head = (uint8_t)((s_notif_head + 1) % NOTIF_Q_N);
+        s_notif_n--;
+    }
+    s_notif_q[(s_notif_head + s_notif_n) % NOTIF_Q_N] = *n;
+    s_notif_n++;
+}
+
+static void notif_q_drop(uint32_t uid) {
+    uint8_t keep = 0;
+    for (uint8_t i = 0; i < s_notif_n; i++) {
+        uint8_t idx = (uint8_t)((s_notif_head + i) % NOTIF_Q_N);
+        if (s_notif_q[idx].uid == uid) continue;
+        uint8_t dst = (uint8_t)((s_notif_head + keep) % NOTIF_Q_N);
+        if (dst != idx) s_notif_q[dst] = s_notif_q[idx];
+        keep++;
+    }
+    s_notif_n = keep;
+}
+
 static void finish_notif(void) {
     if (!s_pending_valid) return;
     if (s_app_timer) esp_timer_stop(s_app_timer);
-    s_notif = s_pending;
-    s_notif_fresh = true;
+    if (uid_cancelled(s_pending.uid)) {
+        s_pending_valid = false;
+        return;
+    }
+    notif_q_push(&s_pending);
     s_pending_valid = false;
-    ESP_LOGI(TAG, "ANCS app=%s name=%s title_len=%u sub_len=%u msg_len=%u date=%s",
-             s_notif.app_id[0] ? s_notif.app_id : "-",
-             s_notif.app_name[0] ? s_notif.app_name : "-",
-             (unsigned)strlen(s_notif.title),
-             (unsigned)strlen(s_notif.subtitle),
-             (unsigned)strlen(s_notif.message),
-             s_notif.date[0] ? s_notif.date : "-");
+    ESP_LOGI(TAG, "ANCS ev=%u app=%s name=%s title_len=%u sub_len=%u msg_len=%u date=%s",
+             (unsigned)s_pending.event,
+             s_pending.app_id[0] ? s_pending.app_id : "-",
+             s_pending.app_name[0] ? s_pending.app_name : "-",
+             (unsigned)strlen(s_pending.title),
+             (unsigned)strlen(s_pending.subtitle),
+             (unsigned)strlen(s_pending.message),
+             s_pending.date[0] ? s_pending.date : "-");
     if (s_activity_cb) s_activity_cb();
 }
 
@@ -524,10 +730,12 @@ static void app_timer_cb(void *arg) {
 }
 
 static void advertise(void);
+static esp_err_t stack_start(void);
+static void stack_stop(void);
 
 static void apply_coex_ps(void) {
-    bool perf = s_stack && ((s_state == BSP_BLE_PAIRING) ||
-                (s_fast_adv && ble_gap_adv_active() != 0));
+    bool perf = s_stack && (ble_gap_adv_active() != 0 ||
+                link_count() > 0 || s_state == BSP_BLE_PAIRING);
     bsp_wifi_set_power_save(!perf);
 }
 
@@ -544,7 +752,9 @@ static bool slots_free(void) {
 }
 
 static bool can_advertise(void) {
-    if (!s_stack || !s_enabled || !s_want_adv || !slots_free()) return false;
+    if (!s_stack || !s_synced || !s_enabled || !s_want_adv || !slots_free()) {
+        return false;
+    }
     if (s_quiet && all_bonded_connected() && !s_user_adv) return false;
     return true;
 }
@@ -555,8 +765,9 @@ static void advertise_if_room(void) {
         apply_coex_ps();
         return;
     }
-    if (s_quiet && all_bonded_connected() && !s_user_adv) {
-        s_want_adv = false;
+    if (!s_synced) {
+        advertise();
+        return;
     }
     if (!can_advertise()) {
         ble_gap_adv_stop();
@@ -570,6 +781,7 @@ static void advertise_if_room(void) {
 
 static void begin_connectable_adv(void) {
     s_wait_notify = false;
+    s_want_adv = true;
     if (s_adv_timer) esp_timer_stop(s_adv_timer);
     arm_fast_adv();
     advertise_if_room();
@@ -601,15 +813,23 @@ static void fast_timer_cb(void *arg) {
     (void)arg;
     s_fast_adv = false;
     if (can_advertise() && s_stack && ble_gap_adv_active()) advertise();
-    else apply_coex_ps();
+    apply_coex_ps();
 }
 
 static void advertise(void) {
     if (!s_stack) return;
-    const char *name = "Passport";
+    if (!s_synced) {
+        if (s_adv_timer) {
+            esp_timer_stop(s_adv_timer);
+            esp_timer_start_once(s_adv_timer, 300000);
+        }
+        return;
+    }
+    const char *name = s_name[0] ? s_name : "Passport";
     uint8_t adv[31];
     uint8_t rsp[31];
     size_t n = strlen(name);
+    if (n > ADV_NAME_MAX) n = ADV_NAME_MAX;
     int i = 0;
     int rc;
 
@@ -618,7 +838,15 @@ static void advertise(void) {
         return;
     }
 
-    ble_gap_adv_stop();
+    bool want_fast = s_fast_adv || s_user_adv;
+    if (ble_gap_adv_active()) {
+        if (s_adv_fast_run == want_fast) {
+            apply_coex_ps();
+            return;
+        }
+        ble_gap_adv_stop();
+        s_adv_fast_run = false;
+    }
 
     // 手工组主广播:iOS 设置用被动扫描,只认 PDU 里的 Complete Local Name(0x09)。
     // 名字必须紧跟 Flags,不能只放在 scan response。
@@ -641,6 +869,27 @@ static void advertise(void) {
     rc = ble_gap_adv_set_data(adv, i);
     ESP_LOGI(TAG, "adv name=%s bytes=%d rc=%d links=%d", name, i, rc, link_count());
     ESP_LOG_BUFFER_HEX(TAG, adv, i);
+    while (rc != 0 && n > 0) {
+        n--;
+        i = 0;
+        adv[i++] = 2;
+        adv[i++] = 0x01;
+        adv[i++] = 0x06;
+        adv[i++] = (uint8_t)(1 + n);
+        adv[i++] = 0x09;
+        memcpy(&adv[i], name, n);
+        i += (int)n;
+        adv[i++] = 3;
+        adv[i++] = 0x19;
+        adv[i++] = 0xC1;
+        adv[i++] = 0x03;
+        adv[i++] = 3;
+        adv[i++] = 0x03;
+        adv[i++] = 0x12;
+        adv[i++] = 0x18;
+        rc = ble_gap_adv_set_data(adv, i);
+        ESP_LOGW(TAG, "adv 缩短 name_len=%u bytes=%d rc=%d", (unsigned)n, i, rc);
+    }
     if (rc != 0) return;
 
     int j = 0;
@@ -667,17 +916,25 @@ static void advertise(void) {
     memset(&params, 0, sizeof(params));
     params.conn_mode = BLE_GAP_CONN_MODE_UND;
     params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    params.itvl_min = s_fast_adv ? ADV_FAST_MIN : ADV_SLOW_MIN;
-    params.itvl_max = s_fast_adv ? ADV_FAST_MAX : ADV_SLOW_MAX;
+    params.itvl_min = want_fast ? ADV_FAST_MIN : ADV_SLOW_MIN;
+    params.itvl_max = want_fast ? ADV_FAST_MAX : ADV_SLOW_MAX;
     params.channel_map = 0x07;
     rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &params, gap_event, NULL);
     if (rc != 0 && rc != BLE_HS_EALREADY) {
         ESP_LOGW(TAG, "adv start rc=%d", rc);
+        s_adv_fast_run = false;
         apply_coex_ps();
+        if (s_adv_timer) {
+            esp_timer_stop(s_adv_timer);
+            esp_timer_start_once(s_adv_timer, 300000);
+        }
         return;
     }
+    s_adv_fast_run = want_fast;
     if (link_count() == 0 && !s_wait_notify) set_state(BSP_BLE_ADVERTISING);
-    ESP_LOGI(TAG, "广播间隔 %s", s_fast_adv ? "fast" : "slow");
+    ESP_LOGI(TAG, "广播间隔 %s active=%d rc=%d",
+             want_fast ? "fast" : "slow",
+             ble_gap_adv_active(), rc);
     apply_coex_ps();
 }
 
@@ -689,7 +946,7 @@ static void subscribe_cccd(uint16_t conn, uint16_t val_handle) {
 
 static void request_attrs(ble_link_t *l, const uint8_t *uid) {
     if (!l || !l->cp) return;
-    uint8_t cmd[20];
+    uint8_t cmd[24];
     int i = 0;
     cmd[i++] = CMD_GET_ATTRS;
     memcpy(&cmd[i], uid, 4);
@@ -705,6 +962,16 @@ static void request_attrs(ble_link_t *l, const uint8_t *uid) {
     cmd[i++] = (uint8_t)(MSG_REQ_MAX & 0xFF);
     cmd[i++] = (uint8_t)(MSG_REQ_MAX >> 8);
     cmd[i++] = ATTR_DATE;
+    if (s_parse_flags & EVT_FLAG_POS) {
+        cmd[i++] = ATTR_POS_LABEL;
+        cmd[i++] = (uint8_t)(LABEL_REQ_MAX & 0xFF);
+        cmd[i++] = (uint8_t)(LABEL_REQ_MAX >> 8);
+    }
+    if (s_parse_flags & EVT_FLAG_NEG) {
+        cmd[i++] = ATTR_NEG_LABEL;
+        cmd[i++] = (uint8_t)(LABEL_REQ_MAX & 0xFF);
+        cmd[i++] = (uint8_t)(LABEL_REQ_MAX >> 8);
+    }
     int rc = ble_gattc_write_flat(l->conn, l->cp, cmd, i, NULL, NULL);
     if (rc != 0) ESP_LOGW(TAG, "get attrs rc=%d", rc);
 }
@@ -766,8 +1033,15 @@ static void parse_app_attrs(const uint8_t *msg, uint16_t len) {
 
 static void parse_notif_attrs(ble_link_t *l, const uint8_t *msg, uint16_t len) {
     if (!msg || len < 5 || msg[0] != CMD_GET_ATTRS) return;
+    uint32_t uid;
+    memcpy(&uid, msg + 1, 4);
+    if (uid_cancelled(uid)) return;
     bsp_ble_notif_t n = { 0 };
+    n.uid = uid;
+    n.conn = l ? l->conn : s_parse_conn;
+    n.flags = s_parse_flags;
     n.category = s_parse_cat;
+    n.event = s_parse_event;
     uint16_t remain = (uint16_t)(len - 5);
     const uint8_t *p = msg + 5;
     while (remain >= 3) {
@@ -779,10 +1053,13 @@ static void parse_notif_attrs(ble_link_t *l, const uint8_t *msg, uint16_t len) {
         else if (id == ATTR_SUBTITLE) copy_attr(n.subtitle, sizeof(n.subtitle), p + 3, alen);
         else if (id == ATTR_MESSAGE) copy_attr(n.message, sizeof(n.message), p + 3, alen);
         else if (id == ATTR_DATE) copy_attr(n.date, sizeof(n.date), p + 3, alen);
+        else if (id == ATTR_POS_LABEL) copy_attr(n.pos_label, sizeof(n.pos_label), p + 3, alen);
+        else if (id == ATTR_NEG_LABEL) copy_attr(n.neg_label, sizeof(n.neg_label), p + 3, alen);
         p += 3 + alen;
         remain = (uint16_t)(remain - 3 - alen);
     }
     if (s_pending_valid) finish_notif();
+    if (uid_cancelled(uid)) return;
     s_pending = n;
     s_pending_valid = true;
     if (n.app_id[0] &&
@@ -812,6 +1089,7 @@ static void data_timer_cb(void *arg) {
 }
 
 static void discover_ancs(uint16_t conn);
+static void read_peer_name(uint16_t conn);
 
 static void disc_timer_cb(void *arg) {
     (void)arg;
@@ -858,11 +1136,13 @@ static int on_cccd_write(uint16_t conn, const struct ble_gatt_error *error,
             ESP_LOGW(TAG, "DS CCCD rc=%d", rc);
             subscribe_cccd(conn, l->ds);
             l->sub_phase = SUB_OK;
+            mark_paired();
             refresh_state();
         }
         return 0;
     }
     l->sub_phase = SUB_OK;
+    mark_paired();
     refresh_state();
     ESP_LOGI(TAG, "ANCS 已订阅 handle=%u", conn);
     return 0;
@@ -901,6 +1181,7 @@ static int on_chr(uint16_t conn, const struct ble_gatt_error *error,
             subscribe_cccd(conn, l->ns);
             subscribe_cccd(conn, l->ds);
             l->sub_phase = SUB_OK;
+            mark_paired();
             refresh_state();
         }
         return 0;
@@ -940,6 +1221,7 @@ static int on_svc(uint16_t conn, const struct ble_gatt_error *error,
 static void discover_ancs(uint16_t conn) {
     ble_link_t *l = link_find(conn);
     if (!l || l->sub_phase == SUB_OK || l->sub_phase == SUB_SKIP) return;
+    read_peer_name(conn);
     l->svc_seen = false;
     int rc = ble_gattc_disc_svc_by_uuid(conn, &UUID_ANCS.u, on_svc, NULL);
     if (rc != 0) ESP_LOGW(TAG, "disc ANCS rc=%d", rc);
@@ -978,28 +1260,36 @@ static void on_encrypted(uint16_t conn) {
         s_pair_conn = BLE_HS_CONN_HANDLE_NONE;
     }
     refresh_state();
-    read_peer_name(conn);
-    int now = peer_bond_count();
-    bool fresh = l->new_bond || now > l->bonds_at_connect;
     l->new_bond = false;
-    // 新绑定后主机保持连接时可能不画详情。断开该链路,其它连接不动。
-    if (fresh) {
-        l->hold = true;
-        ESP_LOGI(TAG, "新绑定 handle=%u bonds %d->%d, 3s 后断开该链路",
-                 conn, l->bonds_at_connect, now);
-        if (s_disc_timer) {
-            esp_timer_stop(s_disc_timer);
-            esp_timer_start_once(s_disc_timer, 3000000);
-        }
-        return;
-    }
-    for (int i = 0; i < BLE_CONN_MAX; i++) {
-        if (s_link[i].hold) return;
-    }
+    l->hold = false;
     ESP_LOGI(TAG, "已加密,发现 ANCS handle=%u", conn);
     if (s_disc_timer && !esp_timer_is_active(s_disc_timer)) {
         esp_timer_start_once(s_disc_timer, 1500000);
     }
+}
+
+static void delete_peer_bond(uint16_t conn) {
+    struct ble_gap_conn_desc d;
+    if (ble_gap_conn_find(conn, &d) != 0) return;
+    int rc = ble_store_util_delete_peer(&d.peer_id_addr);
+    ESP_LOGW(TAG, "删除失步绑定 handle=%u rc=%d", conn, rc);
+}
+
+static void finish_forget_all(void) {
+    if (!s_forget_all_pending || link_count() != 0) return;
+    s_forget_all_pending = false;
+    ble_store_clear();
+    clear_pnames();
+    s_paired_ok = false;
+    s_have_rnd = false;
+    s_want_adv = true;
+    s_user_adv = true;
+    save_ble_flags();
+    if (bsp_ble_new_identity() != ESP_OK) {
+        arm_fast_adv();
+        advertise();
+    }
+    ESP_LOGI(TAG, "已清除全部绑定");
 }
 
 static void handle_notify_src(ble_link_t *l, struct os_mbuf *om) {
@@ -1009,11 +1299,27 @@ static void handle_notify_src(ble_link_t *l, struct os_mbuf *om) {
     uint8_t event = buf[0];
     uint8_t flags = buf[1];
     uint8_t cat = buf[2];
-    if (event != EVT_ADDED) return;
+    uint32_t uid;
+    memcpy(&uid, &buf[4], 4);
+    if (event == EVT_REMOVED) {
+        cancel_uid(uid);
+        if (s_pending_valid && s_pending.uid == uid) {
+            s_pending_valid = false;
+            if (s_app_timer) esp_timer_stop(s_app_timer);
+        }
+        notif_q_drop(uid);
+        push_removed(uid);
+        if (s_activity_cb) s_activity_cb();
+        return;
+    }
+    if (event != EVT_ADDED && event != EVT_MODIFIED) return;
     if (flags & EVT_FLAG_PRE) return;
-    if (cat == CAT_INCOMING) return;
+    if (cat == CAT_INCOMING) flags |= (uint8_t)(EVT_FLAG_POS | EVT_FLAG_NEG);
     if (s_pending_valid) finish_notif();
     s_parse_cat = cat;
+    s_parse_flags = flags;
+    s_parse_event = event;
+    s_parse_conn = l->conn;
     request_attrs(l, &buf[4]);
 }
 
@@ -1041,7 +1347,6 @@ static void handle_notify_ds(ble_link_t *l, struct os_mbuf *om) {
 
 static int gap_event(struct ble_gap_event *event, void *arg) {
     (void)arg;
-    struct ble_gap_conn_desc desc;
     int rc;
     if (s_gap_cb) s_gap_cb(event);
 
@@ -1067,14 +1372,30 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             l->bonds_at_connect = peer_bond_count();
             set_state(BSP_BLE_CONNECTED);
             s_user_adv = false;
-            ESP_LOGI(TAG, "已连接 handle=%u links=%d bonds=%d",
-                     l->conn, link_count(), l->bonds_at_connect);
-            rc = ble_gap_security_initiate(l->conn);
-            if (rc != 0 && rc != BLE_HS_EALREADY) {
-                ESP_LOGW(TAG, "security_initiate rc=%d (主机可能自行配对)", rc);
+            {
+                struct ble_gap_conn_desc d;
+                if (ble_gap_conn_find(l->conn, &d) == 0) {
+                    ESP_LOGI(TAG,
+                             "已连接 handle=%u peer=%02x:%02x:%02x:%02x:%02x:%02x t=%u links=%d bonds=%d",
+                             l->conn,
+                             d.peer_ota_addr.val[5], d.peer_ota_addr.val[4],
+                             d.peer_ota_addr.val[3], d.peer_ota_addr.val[2],
+                             d.peer_ota_addr.val[1], d.peer_ota_addr.val[0],
+                             d.peer_ota_addr.type,
+                             link_count(), l->bonds_at_connect);
+                } else {
+                    ESP_LOGI(TAG, "已连接 handle=%u links=%d bonds=%d",
+                             l->conn, link_count(), l->bonds_at_connect);
+                }
             }
         }
-        schedule_advertise();
+        apply_coex_ps();
+        advertise_if_room();
+        rc = ble_gap_security_initiate(event->connect.conn_handle);
+        if (rc != 0 && rc != BLE_HS_EALREADY) {
+            ESP_LOGW(TAG, "启动加密失败 handle=%u rc=%d",
+                     event->connect.conn_handle, rc);
+        }
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT: {
@@ -1099,6 +1420,10 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             ble_store_util_delete_peer(&event->disconnect.conn.peer_id_addr);
             ESP_LOGI(TAG, "已删除该对端绑定,剩余 bonds=%d", peer_bond_count());
         }
+        if (s_forget_all_pending && link_count() == 0) {
+            finish_forget_all();
+            return 0;
+        }
         if (hold) {
             s_wait_notify = (link_count() == 0);
             if (s_wait_notify) set_state(BSP_BLE_WAIT_NOTIFY);
@@ -1110,6 +1435,7 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             return 0;
         }
         refresh_state();
+        s_want_adv = true;
         arm_fast_adv();
         schedule_advertise();
         if (s_disc_timer) esp_timer_start_once(s_disc_timer, 200000);
@@ -1123,7 +1449,10 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             on_encrypted(event->enc_change.conn_handle);
             apply_coex_ps();
         } else {
-            ESP_LOGW(TAG, "加密失败,配对未完成");
+            ESP_LOGW(TAG, "加密失败,清理旧绑定 handle=%u",
+                     event->enc_change.conn_handle);
+            delete_peer_bond(event->enc_change.conn_handle);
+            ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_AUTH_FAIL);
         }
         return 0;
 
@@ -1144,6 +1473,23 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
         return 0;
     }
 
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        ESP_LOGI(TAG, "conn_update status=%d handle=%u",
+                 event->conn_update.status, event->conn_update.conn_handle);
+        return 0;
+
+    case BLE_GAP_EVENT_CONN_UPDATE_REQ:
+        return 0;
+
+    case BLE_GAP_EVENT_SUBSCRIBE: {
+        ble_link_t *l = link_find(event->subscribe.conn_handle);
+        if (!l) return 0;
+        bool on = event->subscribe.cur_notify != 0;
+        if (event->subscribe.attr_handle == s_hid_kb_handle) l->hid_kb = on;
+        if (event->subscribe.attr_handle == s_hid_cc_handle) l->hid_cc = on;
+        return 0;
+    }
+
     case BLE_GAP_EVENT_ADV_COMPLETE:
         if (!slots_free()) return 0;
         if (s_wait_notify) {
@@ -1154,8 +1500,7 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
         return 0;
 
     case BLE_GAP_EVENT_REPEAT_PAIRING:
-        rc = ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
-        if (rc == 0) ble_store_util_delete_peer(&desc.peer_id_addr);
+        delete_peer_bond(event->repeat_pairing.conn_handle);
         return BLE_GAP_REPEAT_PAIRING_RETRY;
 
     case BLE_GAP_EVENT_PASSKEY_ACTION: {
@@ -1174,11 +1519,9 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             apply_coex_ps();
         } else if (event->passkey.params.action == BLE_SM_IOACT_NUMCMP) {
             s_passkey = event->passkey.params.numcmp;
-            s_pair_confirm = false;
+            s_pair_confirm = true;
             set_state(BSP_BLE_PAIRING);
-            pkey.numcmp_accept = 1;
-            ESP_LOGI(TAG, "数字对比已自动确认");
-            ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+            ESP_LOGI(TAG, "等待设备端确认数字对比");
             apply_coex_ps();
         } else if (event->passkey.params.action == BLE_SM_IOACT_INPUT) {
             // 无键盘输入,回退为拒绝。
@@ -1194,10 +1537,12 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
 }
 
 static void on_reset(int reason) {
+    s_synced = false;
     ESP_LOGW(TAG, "NimBLE reset reason=%d", reason);
 }
 
 static void on_sync(void) {
+    s_synced = true;
     int rc = ble_hs_util_ensure_addr(0);
     if (rc != 0) {
         ESP_LOGE(TAG, "ensure_addr rc=%d", rc);
@@ -1214,8 +1559,8 @@ static void on_sync(void) {
     esp_read_mac(mac, ESP_MAC_BT);
     esp_read_mac(wifi, ESP_MAC_WIFI_STA);
     ble_hs_id_copy_addr(s_own_addr_type, id, NULL);
-    snprintf(s_name, sizeof(s_name), "Passport");
-    ble_svc_gap_device_name_set("Passport");
+    snprintf(s_name, sizeof(s_name), "Passport-%02X%02X", mac[4], mac[5]);
+    ble_svc_gap_device_name_set(s_name);
     ble_svc_gap_device_appearance_set(HID_APPEARANCE);
 #if CONFIG_BT_NIMBLE_DIS_SERVICE
     ble_svc_dis_manufacturer_name_set("FoloToy");
@@ -1226,9 +1571,18 @@ static void on_sync(void) {
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
              id[5], id[4], id[3], id[2], id[1], id[0],
              s_own_addr_type);
-    ESP_LOGI(TAG, "广播名 Passport (HID keyboard), max_conn=%d", BLE_CONN_MAX);
+    ESP_LOGI(TAG, "广播名 %s (HID keyboard), max_conn=%d", s_name, BLE_CONN_MAX);
     if (s_enabled) {
         arm_fast_adv();
+        s_want_adv = true;
+        s_user_adv = true;
+        if (s_have_rnd && set_static_rnd(s_rnd) == 0) {
+            ESP_LOGI(TAG, "随机地址 %02x:%02x:%02x:%02x:%02x:%02x",
+                     s_rnd[5], s_rnd[4], s_rnd[3], s_rnd[2], s_rnd[1], s_rnd[0]);
+            advertise();
+            return;
+        }
+        if (bsp_ble_new_identity() == ESP_OK) return;
         advertise();
     }
     else set_state(BSP_BLE_IDLE);
@@ -1241,16 +1595,6 @@ static void host_task(void *param) {
     nimble_port_freertos_deinit();
 }
 
-static esp_err_t nvs_ready(void) {
-    esp_err_t e = nvs_flash_init();
-    if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS 需擦除后重建");
-        e = nvs_flash_erase();
-        if (e == ESP_OK) e = nvs_flash_init();
-    }
-    return e;
-}
-
 static void stack_reset_links(void)
 {
     for (int i = 0; i < BLE_CONN_MAX; i++) link_reset(&s_link[i]);
@@ -1259,18 +1603,29 @@ static void stack_reset_links(void)
     s_pair_confirm = false;
     s_pair_conn = BLE_HS_CONN_HANDLE_NONE;
     s_wait_notify = false;
-    s_notif_fresh = false;
+    s_notif_head = 0;
+    s_notif_n = 0;
     s_pending_valid = false;
     s_fast_adv = false;
+    s_forget_all_pending = false;
 }
 
 static esp_err_t stack_start(void)
 {
     if (s_stack) return ESP_OK;
 
+    size_t free_sz = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t blk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    if (free_sz < 40 * 1024 || blk < 16 * 1024) {
+        ESP_LOGW(TAG, "堆不足,跳过 BLE free=%u blk=%u",
+                 (unsigned)free_sz, (unsigned)blk);
+        return ESP_ERR_NO_MEM;
+    }
+
     esp_err_t e = nimble_port_init();
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init %s", esp_err_to_name(e));
+        nimble_port_deinit();
         return e;
     }
 
@@ -1292,6 +1647,8 @@ static esp_err_t stack_start(void)
     ble_svc_dis_model_number_set("Passport");
 #endif
     ble_svc_gap_device_appearance_set(HID_APPEARANCE);
+    ble_svc_bas_init();
+    ble_svc_bas_battery_level_set(100);
     int rc = ble_gatts_count_cfg(s_hid_svcs);
     if (rc == 0) rc = ble_gatts_add_svcs(s_hid_svcs);
     if (rc != 0) ESP_LOGW(TAG, "HID GATT rc=%d", rc);
@@ -1303,7 +1660,9 @@ static esp_err_t stack_start(void)
     ble_store_config_init();
     ble_att_set_preferred_mtu(185);
 
-    strlcpy(s_name, "Passport", sizeof(s_name));
+    snprintf(s_name, sizeof(s_name), "Passport");
+    s_synced = false;
+    s_stack_tick = xTaskGetTickCount();
     set_state(BSP_BLE_IDLE);
 
     nimble_port_freertos_init(host_task);
@@ -1319,24 +1678,30 @@ static void stack_stop(void)
 {
     if (!s_stack) return;
 
+    bool synced = s_synced;
+    s_synced = false;
     s_want_adv = false;
     s_user_adv = false;
+    s_adv_fast_run = false;
     if (s_adv_timer) esp_timer_stop(s_adv_timer);
     if (s_disc_timer) esp_timer_stop(s_disc_timer);
     if (s_fast_timer) esp_timer_stop(s_fast_timer);
     if (s_data_timer) esp_timer_stop(s_data_timer);
     if (s_app_timer) esp_timer_stop(s_app_timer);
+    if (s_hid_rel_timer) esp_timer_stop(s_hid_rel_timer);
 
-    ble_gap_adv_stop();
-    for (int i = 0; i < BLE_CONN_MAX; i++) {
-        if (s_link[i].conn == BLE_HS_CONN_HANDLE_NONE) continue;
-        ble_gap_terminate(s_link[i].conn, BLE_ERR_REM_USER_CONN_TERM);
+    if (synced) {
+        ble_gap_adv_stop();
+        for (int i = 0; i < BLE_CONN_MAX; i++) {
+            if (s_link[i].conn == BLE_HS_CONN_HANDLE_NONE) continue;
+            ble_gap_terminate(s_link[i].conn, BLE_ERR_REM_USER_CONN_TERM);
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     int rc = nimble_port_stop();
     if (rc != 0) ESP_LOGW(TAG, "nimble_port_stop rc=%d", rc);
-    /* host_task 在 nimble_port_run 返回后会自删,等它退出再 deinit。 */
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(150));
     esp_err_t e = nimble_port_deinit();
     if (e != ESP_OK) ESP_LOGW(TAG, "nimble_port_deinit %s", esp_err_to_name(e));
 
@@ -1352,11 +1717,9 @@ static void stack_stop(void)
 esp_err_t bsp_ble_init(void) {
     if (s_inited) return ESP_OK;
 
-    esp_err_t e = nvs_ready();
-    if (e != ESP_OK) return e;
-
     for (int i = 0; i < BLE_CONN_MAX; i++) link_reset(&s_link[i]);
     load_ble_flags();
+    s_want_adv = true;
     load_pnames();
 
     const esp_timer_create_args_t data_args = {
@@ -1379,11 +1742,16 @@ esp_err_t bsp_ble_init(void) {
         .callback = fast_timer_cb,
         .name = "ble_fast",
     };
+    const esp_timer_create_args_t hid_args = {
+        .callback = hid_release_cb,
+        .name = "hid_rel",
+    };
     if (esp_timer_create(&data_args, &s_data_timer) != ESP_OK) return ESP_ERR_NO_MEM;
     if (esp_timer_create(&disc_args, &s_disc_timer) != ESP_OK) return ESP_ERR_NO_MEM;
     if (esp_timer_create(&adv_args, &s_adv_timer) != ESP_OK) return ESP_ERR_NO_MEM;
     if (esp_timer_create(&app_args, &s_app_timer) != ESP_OK) return ESP_ERR_NO_MEM;
     if (esp_timer_create(&fast_args, &s_fast_timer) != ESP_OK) return ESP_ERR_NO_MEM;
+    if (esp_timer_create(&hid_args, &s_hid_rel_timer) != ESP_OK) return ESP_ERR_NO_MEM;
 
     strlcpy(s_name, "Passport", sizeof(s_name));
     set_state(BSP_BLE_IDLE);
@@ -1395,7 +1763,7 @@ esp_err_t bsp_ble_init(void) {
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
         return ESP_OK;
     }
-    return stack_start();
+    return ESP_OK;
 }
 
 bsp_ble_state_t bsp_ble_state(void) {
@@ -1420,6 +1788,10 @@ int bsp_ble_conn_max(void) {
 
 int bsp_ble_bond_count(void) {
     return peer_bond_count();
+}
+
+bool bsp_ble_paired(void) {
+    return s_paired_ok;
 }
 
 bool bsp_ble_pair_needs_confirm(void) {
@@ -1457,8 +1829,47 @@ esp_err_t bsp_ble_unpair(void) {
     if (n > 0) return ESP_OK;
 
     ble_store_clear();
+    s_paired_ok = false;
+    save_ble_flags();
     ESP_LOGI(TAG, "无连接,已清除全部绑定");
     advertise();
+    return ESP_OK;
+}
+
+esp_err_t bsp_ble_forget_all(void) {
+    if (!s_inited || !s_stack) return ESP_ERR_INVALID_STATE;
+    s_wait_notify = false;
+    s_forget_all_pending = true;
+    if (s_adv_timer) esp_timer_stop(s_adv_timer);
+    if (s_disc_timer) esp_timer_stop(s_disc_timer);
+    if (s_synced) ble_gap_adv_stop();
+    for (int i = 0; i < BLE_CONN_MAX; i++) {
+        ble_link_t *l = &s_link[i];
+        if (l->conn == BLE_HS_CONN_HANDLE_NONE) continue;
+        l->hold = false;
+        l->unpair = false;
+        ble_gap_terminate(l->conn, BLE_ERR_REM_USER_CONN_TERM);
+    }
+    finish_forget_all();
+    return ESP_OK;
+}
+
+esp_err_t bsp_ble_new_identity(void)
+{
+    if (!s_inited || !s_stack || !s_synced) return ESP_ERR_INVALID_STATE;
+    uint8_t rnd[6];
+    esp_fill_random(rnd, 6);
+    rnd[5] = (uint8_t)((rnd[5] & 0x3F) | 0xC0);
+    if (set_static_rnd(rnd) != 0) return ESP_FAIL;
+    save_ble_flags();
+    s_want_adv = true;
+    s_user_adv = true;
+    s_adv_fast_run = false;
+    if (s_synced) ble_gap_adv_stop();
+    arm_fast_adv();
+    advertise();
+    ESP_LOGI(TAG, "新随机地址 %02x:%02x:%02x:%02x:%02x:%02x",
+             rnd[5], rnd[4], rnd[3], rnd[2], rnd[1], rnd[0]);
     return ESP_OK;
 }
 
@@ -1471,15 +1882,21 @@ bool bsp_ble_adv_active(void) {
 }
 
 esp_err_t bsp_ble_set_advertising(bool on) {
-    if (!s_inited || !s_stack) return ESP_ERR_INVALID_STATE;
+    if (!s_inited) return ESP_ERR_INVALID_STATE;
     if (!s_enabled) return ESP_ERR_INVALID_STATE;
     s_want_adv = on;
     s_user_adv = on;
     if (!on) {
-        ble_gap_adv_stop();
+        if (s_synced) ble_gap_adv_stop();
+        s_adv_fast_run = false;
         refresh_state();
         apply_coex_ps();
         ESP_LOGI(TAG, "用户停止广播");
+        return ESP_OK;
+    }
+    if (!s_stack) return bsp_ble_resume();
+    if (!s_synced) {
+        ESP_LOGI(TAG, "用户开始广播(等同步)");
         return ESP_OK;
     }
     if (!slots_free()) {
@@ -1488,9 +1905,10 @@ esp_err_t bsp_ble_set_advertising(bool on) {
         return ESP_ERR_NO_MEM;
     }
     arm_fast_adv();
+    if (s_adv_timer) esp_timer_stop(s_adv_timer);
     advertise();
-    refresh_state();
     ESP_LOGI(TAG, "用户开始广播 active=%d", ble_gap_adv_active());
+    refresh_state();
     return ESP_OK;
 }
 
@@ -1501,10 +1919,126 @@ esp_err_t bsp_ble_resume_advertising(void) {
 }
 
 bool bsp_ble_take_notif(bsp_ble_notif_t *out) {
-    if (!out || !s_notif_fresh) return false;
-    *out = s_notif;
-    s_notif_fresh = false;
+    if (!out || s_notif_n == 0) return false;
+    *out = s_notif_q[s_notif_head];
+    s_notif_head = (uint8_t)((s_notif_head + 1) % NOTIF_Q_N);
+    s_notif_n--;
     return true;
+}
+
+bool bsp_ble_take_removed(uint32_t *uid) {
+    if (!uid || !s_rm_n) return false;
+    *uid = s_rm[s_rm_head];
+    s_rm_head = (uint8_t)((s_rm_head + 1) % RM_N);
+    s_rm_n--;
+    return true;
+}
+
+esp_err_t bsp_ble_notif_action(uint16_t conn, uint32_t uid, uint8_t action) {
+    if (!s_stack) return ESP_ERR_INVALID_STATE;
+    if (action > BSP_BLE_ACT_NEG) return ESP_ERR_INVALID_ARG;
+    ble_link_t *l = link_ancs(conn);
+    if (!l) return ESP_ERR_INVALID_STATE;
+    uint8_t cmd[6];
+    cmd[0] = CMD_PERFORM;
+    memcpy(&cmd[1], &uid, 4);
+    cmd[5] = action;
+    int rc = ble_gattc_write_flat(l->conn, l->cp, cmd, sizeof(cmd), NULL, NULL);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "ancs action rc=%d", rc);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+static void hid_notify(uint16_t handle, const uint8_t *data, uint16_t len)
+{
+    if (!s_stack || !handle || !data || !len) return;
+    for (int i = 0; i < BLE_CONN_MAX; i++) {
+        ble_link_t *l = &s_link[i];
+        uint16_t conn = l->conn;
+        if (conn == BLE_HS_CONN_HANDLE_NONE) continue;
+        if (handle == s_hid_kb_handle && !l->hid_kb) continue;
+        if (handle == s_hid_cc_handle && !l->hid_cc) continue;
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(data, len);
+        if (!om) continue;
+        int rc = ble_gatts_notify_custom(conn, handle, om);
+        if (rc != 0) ESP_LOGW(TAG, "hid notify handle=%u rc=%d", handle, rc);
+        else break;
+    }
+}
+
+static void hid_cc_press(uint16_t usage)
+{
+    s_hid_cc[0] = (uint8_t)(usage & 0xFF);
+    s_hid_cc[1] = (uint8_t)(usage >> 8);
+    hid_notify(s_hid_cc_handle, s_hid_cc, sizeof(s_hid_cc));
+    s_hid_rel_cc = 1;
+}
+
+static void hid_release_cb(void *arg)
+{
+    (void)arg;
+    if (s_hid_rel_cc) {
+        s_hid_cc[0] = 0;
+        s_hid_cc[1] = 0;
+        hid_notify(s_hid_cc_handle, s_hid_cc, sizeof(s_hid_cc));
+    } else {
+        memset(s_hid_input, 0, sizeof(s_hid_input));
+        hid_notify(s_hid_kb_handle, s_hid_input, sizeof(s_hid_input));
+    }
+}
+
+bool bsp_ble_hid_ready(void)
+{
+    if (!s_stack) return false;
+    for (int i = 0; i < BLE_CONN_MAX; i++) {
+        if (s_link[i].conn != BLE_HS_CONN_HANDLE_NONE &&
+            (s_link[i].hid_kb || s_link[i].hid_cc)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+esp_err_t bsp_ble_hid_tap(bsp_ble_hid_key_t key)
+{
+    if (!bsp_ble_hid_ready()) return ESP_ERR_INVALID_STATE;
+    if (s_hid_rel_timer) {
+        esp_timer_stop(s_hid_rel_timer);
+        hid_release_cb(NULL);
+    }
+    switch (key) {
+    case BSP_BLE_HID_LEFT:
+        s_hid_input[2] = 0x50;
+        hid_notify(s_hid_kb_handle, s_hid_input, sizeof(s_hid_input));
+        s_hid_rel_cc = 0;
+        break;
+    case BSP_BLE_HID_RIGHT:
+        s_hid_input[2] = 0x4F;
+        hid_notify(s_hid_kb_handle, s_hid_input, sizeof(s_hid_input));
+        s_hid_rel_cc = 0;
+        break;
+    case BSP_BLE_HID_VOL_UP:
+        hid_cc_press(HID_CC_VOL_UP);
+        break;
+    case BSP_BLE_HID_VOL_DOWN:
+        hid_cc_press(HID_CC_VOL_DOWN);
+        break;
+    case BSP_BLE_HID_PLAY:
+        hid_cc_press(HID_CC_PLAY);
+        break;
+    case BSP_BLE_HID_NEXT:
+        hid_cc_press(HID_CC_NEXT);
+        break;
+    case BSP_BLE_HID_PREV:
+        hid_cc_press(HID_CC_PREV);
+        break;
+    default:
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_hid_rel_timer) esp_timer_start_once(s_hid_rel_timer, 80000);
+    return ESP_OK;
 }
 
 bool bsp_ble_enabled(void) {
@@ -1515,10 +2049,18 @@ bool bsp_ble_stack_up(void) {
     return s_stack;
 }
 
+bool bsp_ble_synced(void) {
+    return s_stack && s_synced;
+}
+
 esp_err_t bsp_ble_suspend(void)
 {
     if (!s_inited) return ESP_ERR_INVALID_STATE;
+    bool want_adv = s_want_adv;
+    bool user_adv = s_user_adv;
     stack_stop();
+    s_want_adv = want_adv;
+    s_user_adv = user_adv;
     return ESP_OK;
 }
 
@@ -1526,41 +2068,46 @@ esp_err_t bsp_ble_resume(void)
 {
     if (!s_inited) return ESP_ERR_INVALID_STATE;
     if (!s_enabled) return ESP_OK;
+    s_want_adv = true;
+    s_user_adv = true;
+    arm_fast_adv();
+    if (s_stack && !s_synced) {
+        TickType_t age = xTaskGetTickCount() - s_stack_tick;
+        if (age > pdMS_TO_TICKS(2000)) {
+            ESP_LOGW(TAG, "BLE 未同步,重建协议栈");
+            stack_stop();
+            s_want_adv = true;
+            s_user_adv = true;
+        } else {
+            return ESP_OK;
+        }
+    }
+    bool was_up = s_stack;
     esp_err_t e = stack_start();
     if (e != ESP_OK) return e;
-    s_want_adv = true;
-    s_user_adv = false;
-    arm_fast_adv();
-    advertise_if_room();
+    if (was_up) advertise_if_room();
     return ESP_OK;
 }
 
 esp_err_t bsp_ble_set_enabled(bool on) {
     if (!s_inited) return ESP_ERR_INVALID_STATE;
     if (s_enabled == on) {
-        if (on && !s_stack) return bsp_ble_resume();
         if (!on && s_stack) stack_stop();
         return ESP_OK;
     }
     s_enabled = on;
     save_ble_flags();
     if (!on) {
+        s_want_adv = false;
+        s_user_adv = false;
         stack_stop();
         ESP_LOGI(TAG, "BLE 已关闭");
         return ESP_OK;
     }
-    esp_err_t e = stack_start();
-    if (e != ESP_OK) {
-        s_enabled = false;
-        save_ble_flags();
-        return e;
-    }
     s_want_adv = true;
-    s_user_adv = false;
-    arm_fast_adv();
-    advertise_if_room();
+    s_user_adv = true;
     ESP_LOGI(TAG, "BLE 已开启");
-    return ESP_OK;
+    return bsp_ble_resume();
 }
 
 bool bsp_ble_quiet(void) {
@@ -1569,6 +2116,7 @@ bool bsp_ble_quiet(void) {
 
 esp_err_t bsp_ble_set_quiet(bool on) {
     if (!s_inited) return ESP_ERR_INVALID_STATE;
+    if (s_quiet == on) return ESP_OK;
     s_quiet = on;
     save_ble_flags();
     advertise_if_room();

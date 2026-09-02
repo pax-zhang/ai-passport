@@ -1,10 +1,8 @@
-# FoloToy AI Passport — Meow
+# FoloToy AI Passport — iPhone 伴侣
 
 [English](README.md) | 简体中文
 
-**当前 `demo/meow` 分支是独立宠物游戏固件，不是 `main` 上的首页应用。** 开机直接进入 Meow，不包含通知、对讲机、天气、验证器。语言、Wi-Fi、蓝牙、时钟、屏幕、声音都在游戏里设置。Wi-Fi 和蓝牙用于「世界」里的**拜访**和**对战**（近距离蓝牙，或同一已保存局域网）。STA 上的 NTP 用来给宠物对时睡觉。
-
-游戏说明：[English](docs/APPS.md) · [简体中文](docs/APPS.zh_CN.md)
+**当前 `demo/iphone` 分支是 iPhone 伴侣固件，不是 `main` 上的演示菜单。** 开机进入首页磁贴：通知、天气、验证码、遥控、设置。通知消费已配对 iPhone 的 ANCS，遥控是 BLE HID 快门与媒体控制。本镜像不含对讲机。
 
 FoloToy AI Passport 是一个面向 AI agent 的开放式可穿戴 AI 硬件，本仓库是这款 AI 硬件的开发基线。它不只展示“板子能运行什么”，还把 agent 开发应用所需的**硬件事实、稳定接口、资源边界、参考实现和验收方法**放在同一仓库中。
 
@@ -143,7 +141,10 @@ git switch -c feature/my-passport-app
 - LVGL 不是线程安全的；非 LVGL 上下文操作 `lv_*` 对象必须持有 `bsp_lvgl_lock()`。
 - 按键回调只派发轻量事件；录音、播放、存储和其他慢操作放到工作任务。
 - 页面退出时先停止可能访问 UI 的任务或定时器，再删除 screen 并清空对象指针。
-- 全局交互默认是菜单中 `UP`/`DOWN` 导航、`OK` 单击进入、页面中 `OK` 长按返回；改动时要明确说明。
+- 交互约定固定，所有页面一致：`UP`/`DOWN` 短按移动焦点并自动跳过分组标题、只读行和禁用行；`UP`/`DOWN` 长按连续滚动或执行页面自定义动作；`OK` 短按确认或进入；`OK` 长按返回上一层，首页则锁屏。改动时要明确说明。
+- 列表内不放任何返回项；进入页面焦点落在第一个可操作行，返回时恢复上次焦点。焦点存在页栈的 `app_list_t`（`app_shell_list()`）里，页面不应再自带 `static int s_sel`。
+- 列表页构造 `app_row_t` 数组，经 `app_ui_list_bind()` / `app_ui_list_render()` 渲染，不要再手写 `"> "` 前缀和窗口滚动数学。
+- 全屏或半屏浮层通过 `app_shell_register_modal()` 注册 `app_modal_t`，按优先级拦截按键；shell 不应知道每个浮层的存在。
 - 新图片、字体、网络栈、音频缓存、LVGL buffer 或任务栈都要评估内部 RAM；总空闲堆足够不代表存在足够大的连续内存块。
 - 可测试的状态机、协议、计时和布局计算应与 ESP-IDF/LVGL 分离，优先加入主机逻辑测试。
 
@@ -180,7 +181,33 @@ cc -std=c11 -Wall -Wextra -Werror -Imain \
 /tmp/test_app_i18n
 
 cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow.c main/app_meow_logic.c \
+  tests/test_app_logic.c main/app_logic.c main/app_notif_rule.c \
+  main/app_notif_store.c \
+  -o /tmp/test_app_logic
+/tmp/test_app_logic
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_list.c main/app_list.c \
+  -o /tmp/test_app_list
+/tmp/test_app_list
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_notif_store.c main/app_notif_store.c \
+  -o /tmp/test_app_notif_store
+/tmp/test_app_notif_store
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_wifi_flow.c main/app_wifi_flow.c \
+  -o /tmp/test_app_wifi_flow
+/tmp/test_app_wifi_flow
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_net_policy.c main/app_net_policy.c \
+  -o /tmp/test_app_net_policy
+/tmp/test_app_net_policy
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_meow.c main/app_meow_logic.c main/app_logic.c \
   -o /tmp/test_app_meow
 /tmp/test_app_meow
 
@@ -213,12 +240,15 @@ cc -std=c11 -Wall -Wextra -Werror -Imain \
 
 - USB Serial/JTAG 有稳定启动日志，无重启循环、assert 或 watchdog；
 - 显示方向、颜色、边缘、刷新与背光正确；
-- `UP` / `DOWN` / `OK` 的目标事件和长按返回正确；
+- 每个页面的 `UP` / `DOWN` / `OK` 事件正确：焦点不会停在标题行或禁用行，`OK` 长按逐层返回并恢复上次焦点，首页长按锁屏；
 - 音频采样速度、播放、非零录音和页面退出正确；
 - 电池读数合理，CW2017 缺失时应用能安全降级；
 - Wi-Fi 页能扫描、加入网络，复位后用已存凭据自动重连，并且可以忘记网络；
 - BLE 页能广播、与 iPhone 以及另一台主机（如 Mac 或另一台 Passport，最多 2 路同时在线）配对、接收 ANCS 通知，并显示关键字匹配的短信（或抽出的验证码）；
-- 对讲机页能以 WebRTC/Wi-Fi 或蓝牙启动，按住上键说话、确定停止；同一频道的两台设备能互相听到；同一局域网的手机可打开扫码页上的 `http://<ip>:8080/`（普通 HTTP，不要用 80 端口）；麦克风页 `/w`、`/rtc` 会跳到 `https://<ip>:8443/`（需接受自签证书）；不要用微信内置浏览器，用 Safari 或 Chrome 打开；Passport 只做信令；
+- 通知三档实测符合配置：静默只加未读角标、不弹窗不响；弹窗按自动隐藏时长关闭；强提醒常驻且勿扰期仍响；
+- iPhone 侧划掉通知后，弹窗与通知列表同步移除（ANCS `REMOVED`）；编辑通知时原地更新已有条目而不是新增一条（`MODIFIED`）；
+- 连发 5 条以上通知不丢条目，验证 BSP 环形队列；
+- 重启后通知历史与未读数保留；
 - 重复进出页面和并发操作后没有任务、对象或堆持续泄漏。
 
 agent 的最终交付应明确区分：
@@ -237,10 +267,11 @@ Unverified: 仍需板卡、仪器或用户确认的事项
 ```text
 components/bsp/include/  BSP 公开 API 与 bsp_pins.h 硬件事实
 components/bsp/src/      显示、按键、音频、电池、Wi-Fi、BLE、共享 I2C 实现
-main/                    最小菜单、LVGL UI 与独立硬件演示页
+main/                    首页壳层、LVGL UI、列表组件与各应用页
+main/app_list.c          所有列表页共用的行模型与焦点/窗口控制器
+main/app_notif_store.c   通知历史：uid 去重、未读状态与 NVS blob
 tests/                   可脱离硬件运行的轻量逻辑测试源
-docs/                    agent 硬件指南、机上应用/设置说明与扩展文档
-docs/APPS.zh_CN.md       首页应用、设置项与 NVS 键
+docs/                    agent 硬件指南与扩展文档
 sdkconfig.defaults       ESP32-C3、USB console、Flash、LVGL、Wi-Fi STA、NimBLE 默认配置
 partitions.csv           8 MB Flash 分区，双 OTA 槽各约 3.9 MB
 AGENTS.md                agent 在本仓库的编码、验证和提交规则

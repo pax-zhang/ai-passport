@@ -24,12 +24,15 @@ int main(void)
     assert(strcmp(app_str(APP_STR_LOG_NONE), "暂无日志") == 0);
     assert(strcmp(app_str(APP_STR_CAT_SOCIAL), "社交") == 0);
     assert(strcmp(app_str(APP_STR_HOME_CODES), "验证器") == 0);
-    assert(strcmp(app_str(APP_STR_HOME_WALKIE), "对讲机") == 0);
     assert(strcmp(app_str(APP_STR_WX_TODAY), "今天") == 0);
     assert(strcmp(app_str(APP_STR_WX_TOMORROW), "明天") == 0);
     assert(strcmp(app_str(APP_STR_HINT_OPEN), "确定进入  长按返回") == 0);
     assert(strcmp(app_str(APP_STR_HOLD_DELETE), "长按上键删除") == 0);
-    assert(strcmp(app_str(APP_STR_WALKIE_START), "开始") == 0);
+    assert(strcmp(app_str(APP_STR_ACT_ANSWER), "接听") == 0);
+    assert(strcmp(app_str(APP_STR_ACT_DECLINE), "拒接") == 0);
+    assert(strcmp(app_str(APP_STR_ACT_CLEAR), "清除") == 0);
+    assert(strcmp(app_str(APP_STR_HOME_REMOTE), "遥控") == 0);
+    assert(strcmp(app_str(APP_STR_RC_PLAY), "播放/暂停") == 0);
     assert(strchr(app_str(APP_STR_TOTP_CONFIRM), '%') != NULL);
     assert(strcmp(app_str(APP_STR_MEOW_DARK), "灯关了") == 0);
     assert(strcmp(app_str(APP_STR_MEOW_LIT), "灯开了") == 0);
@@ -81,9 +84,9 @@ int main(void)
     assert(strstr(app_str(APP_STR_MEOW_MAT_HINT), "确定选中交换") != NULL);
     assert(strcmp(app_str(APP_STR_MEOW_HOLD_BACK), "长按确定全局返回") == 0);
     assert(strcmp(app_str(APP_STR_MEOW_WIPE), "重置游戏") == 0);
-    assert(strcmp(app_str(APP_STR_BEDTIME), "入睡") == 0);
-    assert(strcmp(app_str(APP_STR_WAKE), "起床") == 0);
-    assert(strcmp(app_str(APP_STR_PET_HOURS), "睡觉时段") == 0);
+    assert(strcmp(app_str(APP_STR_BEDTIME), "开始") == 0);
+    assert(strcmp(app_str(APP_STR_WAKE), "结束") == 0);
+    assert(strcmp(app_str(APP_STR_PET_HOURS), "勿扰时段") == 0);
     assert(strcmp(app_str(APP_STR_SET_CLOCK), "对时") == 0);
     assert(strstr(app_str(APP_STR_CLOCK_HINT), "即存") != NULL);
     assert(strstr(app_str(APP_STR_CLOCK_SET_HINT), "对时") != NULL);
@@ -96,6 +99,9 @@ int main(void)
 
     app_lang_set(APP_LANG_EN);
     assert(strcmp(app_str(APP_STR_MEOW_DEX_ITM), "Items") == 0);
+    assert(strcmp(app_str(APP_STR_ACT_ANSWER), "Answer") == 0);
+    assert(strcmp(app_str(APP_STR_ACT_CLOSE), "Close") == 0);
+    assert(strcmp(app_str(APP_STR_HOME_REMOTE), "Remote") == 0);
     assert(strcmp(app_str(APP_STR_UPDATE), "Update") == 0);
     assert(strcmp(app_str(APP_STR_MEOW), "Pet") == 0);
     assert(strcmp(app_str(APP_STR_MEOW_HINT), "UP/DOWN pages  OK open") == 0);

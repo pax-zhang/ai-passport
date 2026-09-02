@@ -67,48 +67,14 @@ bool app_notif_show_subtitle(const char *title, const char *subtitle)
     return true;
 }
 
-static char ascii_lower(char c)
+bool app_dnd_in_range(int hour, int start, int end)
 {
-    if (c >= 'A' && c <= 'Z') return (char)(c - 'A' + 'a');
-    return c;
-}
-
-static bool has_non_ascii(const char *s)
-{
-    for (; *s; s++) {
-        if ((unsigned char)*s >= 0x80) return true;
-    }
-    return false;
-}
-
-static bool contains(const char *hay, const char *needle)
-{
-    if (!hay || !needle || !needle[0]) return false;
-    if (has_non_ascii(needle)) return strstr(hay, needle) != NULL;
-
-    size_t nlen = strlen(needle);
-    for (const char *p = hay; *p; p++) {
-        size_t i = 0;
-        while (i < nlen && p[i] && ascii_lower(p[i]) == ascii_lower(needle[i])) i++;
-        if (i == nlen) return true;
-    }
-    return false;
-}
-
-int app_kw_match(const char *text, const app_kw_t *kws, int kw_n)
-{
-    if (!text) return -1;
-    if (kw_n <= 0 || !kws) return APP_PRIO_NORMAL;
-
-    int best = -1;
-    for (int i = 0; i < kw_n; i++) {
-        if (!kws[i].text[0]) continue;
-        if (!contains(text, kws[i].text)) continue;
-        int p = kws[i].prio ? APP_PRIO_HIGH : APP_PRIO_NORMAL;
-        if (p > best) best = p;
-        if (best == APP_PRIO_HIGH) return best;
-    }
-    return best;
+    if (hour < 0 || hour > 23) return false;
+    if (start < 0 || start > 23) start = 21;
+    if (end < 0 || end > 23) end = 8;
+    if (start == end) return false;
+    if (start < end) return hour >= start && hour < end;
+    return hour >= start || hour < end;
 }
 
 void app_notif_q_init(app_notif_q_t *q)
@@ -127,15 +93,36 @@ bool app_notif_q_push(app_notif_q_t *q, const app_notif_item_t *src)
     int i = (q->head + q->count) % APP_NOTIF_Q;
     app_notif_item_t *it = &q->items[i];
     *it = *src;
-    it->prio = src->prio ? APP_PRIO_HIGH : APP_PRIO_NORMAL;
+    if (it->alert > APP_ALERT_URGENT) it->alert = APP_ALERT_URGENT;
     q->count++;
     return true;
+}
+
+bool app_notif_q_update(app_notif_q_t *q, const app_notif_item_t *it)
+{
+    if (!q || !it || !it->uid) return false;
+    for (int i = 0; i < q->count; i++) {
+        int idx = (q->head + i) % APP_NOTIF_Q;
+        if (q->items[idx].uid != it->uid) continue;
+        q->items[idx] = *it;
+        if (q->items[idx].alert > APP_ALERT_URGENT) {
+            q->items[idx].alert = APP_ALERT_URGENT;
+        }
+        return true;
+    }
+    return false;
 }
 
 const app_notif_item_t *app_notif_q_front(const app_notif_q_t *q)
 {
     if (!q || q->count <= 0) return NULL;
     return &q->items[q->head];
+}
+
+const app_notif_item_t *app_notif_q_at(const app_notif_q_t *q, int i)
+{
+    if (!q || i < 0 || i >= q->count) return NULL;
+    return &q->items[(q->head + i) % APP_NOTIF_Q];
 }
 
 void app_notif_q_pop(app_notif_q_t *q)
@@ -150,161 +137,74 @@ int app_notif_q_count(const app_notif_q_t *q)
     return q ? q->count : 0;
 }
 
-void app_log_init(app_log_t *log)
+void app_notif_q_drop_uid(app_notif_q_t *q, uint32_t uid)
 {
-    app_log_clear(log);
-}
-
-void app_log_clear(app_log_t *log)
-{
-    if (!log) return;
-    memset(log, 0, sizeof(*log));
-}
-
-bool app_log_push(app_log_t *log, const app_log_item_t *src)
-{
-    if (!log || !src) return false;
-    log->items[log->head] = *src;
-    log->head = (log->head + 1) % APP_LOG_N;
-    if (log->count < APP_LOG_N) log->count++;
-    return true;
-}
-
-int app_log_count(const app_log_t *log)
-{
-    return log ? log->count : 0;
-}
-
-const app_log_item_t *app_log_at(const app_log_t *log, int newest_i)
-{
-    if (!log || newest_i < 0 || newest_i >= log->count) return NULL;
-    int i = log->head - 1 - newest_i;
-    i %= APP_LOG_N;
-    if (i < 0) i += APP_LOG_N;
-    return &log->items[i];
-}
-
-bool app_log_remove(app_log_t *log, int newest_i)
-{
-    if (!log || newest_i < 0 || newest_i >= log->count) return false;
-    int phys = log->head - 1 - newest_i;
-    phys %= APP_LOG_N;
-    if (phys < 0) phys += APP_LOG_N;
-    int last = log->head - 1;
-    last %= APP_LOG_N;
-    if (last < 0) last += APP_LOG_N;
-    while (phys != last) {
-        int next = phys + 1;
-        if (next >= APP_LOG_N) next = 0;
-        log->items[phys] = log->items[next];
-        phys = next;
-    }
-    memset(&log->items[last], 0, sizeof(log->items[0]));
-    log->head = last;
-    log->count--;
-    return true;
-}
-
-const char *app_log_app_key(const app_log_item_t *it)
-{
-    if (!it) return "";
-    if (it->app_id[0]) return it->app_id;
-    if (it->app_name[0]) return it->app_name;
-    return "";
-}
-
-void app_log_app_label(const app_log_item_t *it, char *out, size_t n)
-{
-    if (!out || n == 0) return;
-    out[0] = 0;
-    if (!it) return;
-    if (it->app_name[0]) {
-        cpy(out, n, it->app_name);
-        return;
-    }
-    if (!it->app_id[0]) return;
-    const char *last = it->app_id;
-    for (const char *p = it->app_id; *p; p++) {
-        if (*p == '.') last = p + 1;
-    }
-    cpy(out, n, last[0] ? last : it->app_id);
-}
-
-int app_log_apps(const app_log_t *log, app_log_group_t *out, int max)
-{
-    if (!log || !out || max < 1) return 0;
+    if (!q || q->count <= 0) return;
     int n = 0;
-    for (int i = 0; i < log->count; i++) {
-        const app_log_item_t *it = app_log_at(log, i);
-        const char *key = app_log_app_key(it);
-        int found = -1;
-        for (int j = 0; j < n; j++) {
-            if (strcmp(out[j].app_id, key) == 0) {
-                found = j;
-                break;
-            }
-        }
-        if (found >= 0) {
-            out[found].count++;
-            continue;
-        }
-        if (n >= max) continue;
-        memset(&out[n], 0, sizeof(out[n]));
-        cpy(out[n].app_id, sizeof(out[n].app_id), key);
-        app_log_app_label(it, out[n].app_name, sizeof(out[n].app_name));
-        out[n].count = 1;
+    for (int i = 0; i < q->count; i++) {
+        int idx = (q->head + i) % APP_NOTIF_Q;
+        if (q->items[idx].uid == uid) continue;
+        int dst = (q->head + n) % APP_NOTIF_Q;
+        if (dst != idx) q->items[dst] = q->items[idx];
+        n++;
+    }
+    q->count = n;
+}
+
+int app_notif_acts(const app_notif_item_t *it, app_notif_act_t *out, int max)
+{
+    if (!it || !out || max <= 0) return 0;
+    int n = 0;
+    bool incoming = it->category == APP_CAT_INCOMING;
+    if (!incoming && n < max) {
+        out[n].kind = APP_NOTIF_ACT_CLOSE;
+        out[n].label[0] = 0;
+        n++;
+    }
+    uint8_t order_f[2];
+    uint8_t order_k[2];
+    if (incoming) {
+        order_f[0] = APP_NOTIF_FLAG_POS;
+        order_k[0] = APP_NOTIF_ACT_POS;
+        order_f[1] = APP_NOTIF_FLAG_NEG;
+        order_k[1] = APP_NOTIF_ACT_NEG;
+    } else {
+        order_f[0] = APP_NOTIF_FLAG_NEG;
+        order_k[0] = APP_NOTIF_ACT_NEG;
+        order_f[1] = APP_NOTIF_FLAG_POS;
+        order_k[1] = APP_NOTIF_ACT_POS;
+    }
+    for (int i = 0; i < 2 && n < max; i++) {
+        if (!(it->flags & order_f[i])) continue;
+        out[n].kind = order_k[i];
+        cpy(out[n].label, sizeof(out[n].label),
+            order_k[i] == APP_NOTIF_ACT_POS ? it->pos_label : it->neg_label);
+        n++;
+    }
+    if (n == 0 && n < max) {
+        out[n].kind = APP_NOTIF_ACT_CLOSE;
+        out[n].label[0] = 0;
         n++;
     }
     return n;
 }
 
-int app_log_cats(const app_log_t *log, app_log_group_t *out, int max)
+int app_notif_act_default(const app_notif_act_t *acts, int n, uint8_t category)
 {
-    if (!log || !out || max < 1) return 0;
-    int n = 0;
-    for (int i = 0; i < log->count; i++) {
-        const app_log_item_t *it = app_log_at(log, i);
-        int found = -1;
-        for (int j = 0; j < n; j++) {
-            if (out[j].category == it->category) {
-                found = j;
-                break;
-            }
+    if (!acts || n <= 0) return 0;
+    if (category == APP_CAT_INCOMING) {
+        for (int i = 0; i < n; i++) {
+            if (acts[i].kind == APP_NOTIF_ACT_POS) return i;
         }
-        if (found >= 0) {
-            out[found].count++;
-            continue;
+        for (int i = 0; i < n; i++) {
+            if (acts[i].kind == APP_NOTIF_ACT_NEG) return i;
         }
-        if (n >= max) continue;
-        memset(&out[n], 0, sizeof(out[n]));
-        out[n].category = it->category;
-        out[n].count = 1;
-        n++;
+        return 0;
     }
-    return n;
-}
-
-int app_log_match_app(const app_log_t *log, const char *app_id, int *idx, int max)
-{
-    if (!log || !idx || max < 1) return 0;
-    if (!app_id) app_id = "";
-    int n = 0;
-    for (int i = 0; i < log->count && n < max; i++) {
-        const app_log_item_t *it = app_log_at(log, i);
-        if (strcmp(app_log_app_key(it), app_id) == 0) idx[n++] = i;
+    for (int i = 0; i < n; i++) {
+        if (acts[i].kind == APP_NOTIF_ACT_CLOSE) return i;
     }
-    return n;
-}
-
-int app_log_match_cat(const app_log_t *log, uint8_t category, int *idx, int max)
-{
-    if (!log || !idx || max < 1) return 0;
-    int n = 0;
-    for (int i = 0; i < log->count && n < max; i++) {
-        const app_log_item_t *it = app_log_at(log, i);
-        if (it->category == category) idx[n++] = i;
-    }
-    return n;
+    return 0;
 }
 
 static uint32_t rol32(uint32_t x, int n)
@@ -710,7 +610,6 @@ static bool parse_otpauth(const char *uri, app_totp_acct_t *acct, bool fill_name
         if (sec < 15 || sec > 120) return false;
         acct->period = (uint8_t)sec;
     }
-    totp_defaults(acct);
 
     if (!fill_names) return true;
 
@@ -745,7 +644,6 @@ bool app_totp_ingest(const char *text, app_totp_acct_t *acct, bool fill_names)
         return parse_otpauth(text, acct, fill_names);
     }
     if (!apply_secret(acct, text)) return false;
-    totp_defaults(acct);
     return true;
 }
 

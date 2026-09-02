@@ -23,15 +23,15 @@ static const char PAGE[] =
     "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
     "<title>Meow</title>"
     "<style>"
-    "body{margin:0;background:#FFF7EA;font-family:sans-serif;color:#5B4636}"
+    "body{margin:0;background:#FFF7EA;font-family:-apple-system,system-ui,sans-serif;color:#5B4636}"
     "main{max-width:480px;margin:24px auto;background:#FFFFFF;"
-    "padding:16px;border:4px solid #5B4636}"
-    "h1{margin:0 0 8px;font-size:22px}"
-    "p{margin:0 0 12px;color:#8A7460;font-size:14px}"
-    "textarea{width:100%;min-height:140px;font-size:20px;padding:10px;"
-    "border:3px solid #5B4636;box-sizing:border-box}"
-    "button{width:100%;margin-top:12px;padding:14px;font-size:18px;"
-    "font-weight:700;background:#FFC857;border:3px solid #5B4636}"
+    "padding:20px;border-radius:16px}"
+    "h1{margin:0 0 8px;font-size:22px;font-weight:600}"
+    "p{margin:0 0 12px;color:#8A7460;font-size:15px}"
+    "textarea{width:100%;min-height:140px;font-size:20px;padding:12px;"
+    "border:0;background:#FFF3E0;border-radius:12px;box-sizing:border-box}"
+    "button{width:100%;margin-top:12px;padding:14px;font-size:17px;"
+    "font-weight:600;background:#FFC857;border:0;border-radius:12px}"
     "#ok{min-height:1.4em;color:#5C9A3A}"
     "</style>"
     "<main><h1>Meow</h1><p id=st></p>"
@@ -169,7 +169,7 @@ static void qr_draw_cb(lv_event_t *e)
 
     lv_draw_rect_dsc_t dsc;
     lv_draw_rect_dsc_init(&dsc);
-    dsc.bg_color = lv_color_hex(UI_INK);
+    dsc.bg_color = lv_color_hex(0x000000);
     dsc.bg_opa = LV_OPA_COVER;
     dsc.border_width = 0;
     dsc.radius = 0;
@@ -342,11 +342,8 @@ void app_meow_web_init(lv_obj_t *screen)
     ui_pixel_strip_theme(s_qr_box);
     lv_obj_set_pos(s_qr_box, 10, 16);
     lv_obj_set_size(s_qr_box, 220, 288);
-    lv_obj_set_style_border_width(s_qr_box, 4, 0);
-    lv_obj_set_style_border_color(s_qr_box, lv_color_hex(UI_INK), 0);
+    ui_pixel_card_style(s_qr_box, UI_PAPER, UI_LINE);
     lv_obj_set_style_pad_all(s_qr_box, 8, 0);
-    lv_obj_set_style_bg_opa(s_qr_box, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(s_qr_box, lv_color_hex(UI_PAPER), 0);
 
     s_qr_title = lv_label_create(s_qr_box);
     lv_obj_set_style_text_font(s_qr_title, ui_pixel_font_20(), 0);

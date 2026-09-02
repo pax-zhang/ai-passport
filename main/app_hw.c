@@ -16,6 +16,8 @@
 #include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 
 #include <stdio.h>
@@ -27,7 +29,6 @@
 
 static lv_obj_t *s_title, *s_hint, *s_body;
 static lv_timer_t *s_timer;
-static int s_top;
 static int s_n;
 static char s_line[HW_MAX][HW_COLS];
 static bool s_codec;
@@ -151,6 +152,9 @@ static void collect(void)
              (unsigned)((lv.free_size + 512) / 1024),
              (unsigned)((lv.total_size + 512) / 1024));
     add(app_str(APP_STR_HW_LVGL), v);
+    snprintf(v, sizeof(v), "%u B",
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+    add("LV stack", v);
 
     const esp_app_desc_t *app = esp_app_get_description();
     if (app && app->version[0]) {
@@ -207,9 +211,13 @@ static void paint(void)
 
     collect();
     if (s_n < 1) s_n = 1;
-    int max_top = s_n > HW_WIN ? s_n - HW_WIN : 0;
-    if (s_top > max_top) s_top = max_top;
-    if (s_top < 0) s_top = 0;
+    app_list_t *l = app_shell_list();
+    app_list_keep(l, NULL, s_n, HW_WIN);
+    int s_top = 0;
+    if (l) {
+        l->no_wrap = true;
+        s_top = l->top;
+    }
 
     char buf[HW_WIN * (HW_COLS + 1) + 8];
     size_t o = 0;
@@ -266,13 +274,15 @@ static void temp_stop(void)
 
 void app_hw_enter(lv_obj_t *p)
 {
-    s_top = 0;
     probe_i2c();
     temp_start();
     lv_obj_t *card = app_ui_card(p);
     s_title = app_ui_title(card, app_str(APP_STR_HARDWARE));
     s_hint = app_ui_hint(card);
     s_body = app_ui_body(card, 44);
+    lv_obj_set_style_text_color(s_title, lv_color_hex(UI_TEXT), 0);
+    lv_obj_set_style_text_color(s_hint, lv_color_hex(UI_MUTE), 0);
+    lv_obj_set_style_text_color(s_body, lv_color_hex(UI_TEXT), 0);
     s_timer = lv_timer_create(tick, 1000, NULL);
     paint();
 }
@@ -287,12 +297,7 @@ void app_hw_exit(void)
 void app_hw_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
     if (ev != BSP_BTN_CLICK) return;
-    int max_top = s_n > HW_WIN ? s_n - HW_WIN : 0;
-    if (btn == BSP_BTN_UP) {
-        if (s_top > 0) s_top--;
-        paint();
-    } else if (btn == BSP_BTN_DOWN) {
-        if (s_top < max_top) s_top++;
-        paint();
-    }
+    if (btn != BSP_BTN_UP && btn != BSP_BTN_DOWN) return;
+    app_list_move(app_shell_list(), NULL, btn == BSP_BTN_UP ? -1 : 1);
+    paint();
 }

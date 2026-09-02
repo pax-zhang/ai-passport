@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include "app_i18n.h"
+#include "app_net.h"
 #include "app_prefs.h"
 #include "app_ui.h"
 #include "app_web.h"
@@ -34,6 +35,12 @@ static uint32_t s_retry_at;
 #define WX_BUF 3072
 #define WX_SET_N 6
 #define WX_DAYS 4
+#define HUD_BG       UI_BG
+#define HUD_PANEL    UI_CARD
+#define HUD_LINE     UI_LINE
+#define HUD_CYAN     UI_CYAN
+#define HUD_VIOLET   UI_VIOLET
+#define HUD_MUTE     UI_MUTE
 
 typedef enum { VIEW_MAIN = 0, VIEW_SET, VIEW_KB } view_t;
 
@@ -96,12 +103,14 @@ typedef struct {
 static wx_snap_t s_snap;
 static volatile int s_req; // 1=forecast 2=geocode
 static volatile bool s_paused;
-static volatile bool s_die;
 static char s_lookup[33];
 static char s_http[WX_BUF];
 static int64_t s_hold_off_us;
+static volatile bool s_geo_fail;
 
 static lv_obj_t *s_title, *s_hint, *s_body, *s_icon, *s_temp;
+static lv_obj_t *s_card, *s_mini_qr, *s_mini_url;
+static lv_obj_t *s_set_rows[WX_SET_N], *s_set_labs[WX_SET_N], *s_set_metas[WX_SET_N];
 static lv_timer_t *s_timer;
 static view_t s_view;
 static int s_sel, s_kb_sel, s_kb_set, s_icon_wmo = -1, s_day;
@@ -231,41 +240,41 @@ void app_wx_draw_icon(lv_obj_t *p, int wmo)
     if (wmo < 0) return;
     int k = wx_kind(wmo);
     if (k <= 1) {
-        pix(p, 18, 2, 4, 6, UI_YELLOW);
-        pix(p, 18, 32, 4, 6, UI_YELLOW);
-        pix(p, 2, 18, 6, 4, UI_YELLOW);
-        pix(p, 32, 18, 6, 4, UI_YELLOW);
-        pix(p, 8, 8, 4, 4, UI_YELLOW);
-        pix(p, 28, 8, 4, 4, UI_YELLOW);
-        pix(p, 8, 28, 4, 4, UI_YELLOW);
-        pix(p, 28, 28, 4, 4, UI_YELLOW);
-        pix(p, 12, 12, 16, 16, UI_YELLOW);
+        pix(p, 18, 2, 4, 6, HUD_VIOLET);
+        pix(p, 18, 32, 4, 6, HUD_VIOLET);
+        pix(p, 2, 18, 6, 4, HUD_VIOLET);
+        pix(p, 32, 18, 6, 4, HUD_VIOLET);
+        pix(p, 8, 8, 4, 4, HUD_CYAN);
+        pix(p, 28, 8, 4, 4, HUD_CYAN);
+        pix(p, 8, 28, 4, 4, HUD_CYAN);
+        pix(p, 28, 28, 4, 4, HUD_CYAN);
+        pix(p, 12, 12, 16, 16, HUD_CYAN);
     }
     if (k == 1 || k >= 2) {
-        uint32_t cld = (k == 7) ? 0xD0D8E0 : UI_MUTED;
+        uint32_t cld = (k == 7) ? 0xB9D9E8 : HUD_LINE;
         pix(p, 8, 16, 28, 12, cld);
         pix(p, 14, 10, 16, 10, cld);
         pix(p, 4, 20, 8, 8, cld);
         pix(p, 28, 20, 10, 8, cld);
     }
     if (k == 4) {
-        pix(p, 6, 30, 8, 3, UI_MUTED);
-        pix(p, 18, 34, 10, 3, UI_MUTED);
-        pix(p, 28, 30, 8, 3, UI_MUTED);
+        pix(p, 6, 30, 8, 3, HUD_VIOLET);
+        pix(p, 18, 34, 10, 3, HUD_VIOLET);
+        pix(p, 28, 30, 8, 3, HUD_VIOLET);
     }
     if (k == 5 || k == 6 || k == 8) {
-        pix(p, 12, 30, 3, 8, 0xB9F3FF);
-        pix(p, 20, 32, 3, 8, 0xB9F3FF);
-        pix(p, 28, 30, 3, 8, 0xB9F3FF);
+        pix(p, 12, 30, 3, 8, HUD_CYAN);
+        pix(p, 20, 32, 3, 8, HUD_CYAN);
+        pix(p, 28, 30, 3, 8, HUD_CYAN);
     }
     if (k == 7) {
-        pix(p, 12, 30, 6, 3, 0xFFFFFF);
-        pix(p, 22, 34, 6, 3, 0xFFFFFF);
-        pix(p, 16, 36, 6, 3, 0xFFFFFF);
+        pix(p, 12, 30, 6, 3, HUD_CYAN);
+        pix(p, 22, 34, 6, 3, HUD_CYAN);
+        pix(p, 16, 36, 6, 3, HUD_CYAN);
     }
     if (k == 8) {
-        pix(p, 20, 18, 4, 14, UI_YELLOW);
-        pix(p, 16, 24, 12, 4, UI_YELLOW);
+        pix(p, 20, 18, 4, 14, HUD_VIOLET);
+        pix(p, 16, 24, 12, 4, HUD_VIOLET);
     }
 }
 
@@ -865,12 +874,13 @@ static void fetch_forecast(void)
     xSemaphoreTake(s_mu, portMAX_DELAY);
     next = s_snap;
     xSemaphoreGive(s_mu);
-    size_t blk = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    size_t blk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     ESP_LOGI(TAG, "fetch heap=%u blk=%u",
              (unsigned)esp_get_free_heap_size(), (unsigned)blk);
-    if (blk < 6144 && next.ok == 1) {
+    if (!app_net_heap_ready(10 * 1024) ||
+        !app_net_acquire(APP_NET_WEATHER, 0)) {
         ESP_LOGW(TAG, "skip fetch, keep cache");
-        s_hold_off_us = esp_timer_get_time() + 60LL * 1000000;
+        s_hold_off_us = esp_timer_get_time() + 15LL * 1000000;
         next.busy = 0;
         xSemaphoreTake(s_mu, portMAX_DELAY);
         s_snap = next;
@@ -880,6 +890,7 @@ static void fetch_forecast(void)
     radio_enter();
     bool ok = try_itboy(&next) || try_openmeteo(&next) || try_wttr(&next);
     radio_leave();
+    app_net_release(APP_NET_WEATHER);
     if (!ok) {
         next.fail_us = esp_timer_get_time();
         if (next.ok != 1) next.ok = 2;
@@ -894,6 +905,7 @@ static void fetch_forecast(void)
 
 static void fetch_geocode(const char *q)
 {
+    s_geo_fail = false;
     int preset = city_by_name(q);
     if (preset >= 0) {
         app_prefs_t *p = app_prefs();
@@ -905,9 +917,6 @@ static void fetch_geocode(const char *q)
         fetch_forecast();
         return;
     }
-    app_prefs_t *p = app_prefs();
-    ui_pixel_utf8_copy(p->wx_city, sizeof(p->wx_city), q);
-    app_prefs_save();
     char enc[96];
     pct_enc(enc, sizeof(enc), q);
     char url[220];
@@ -916,19 +925,32 @@ static void fetch_geocode(const char *q)
              "&count=1&language=%s",
              enc, app_lang() == APP_LANG_ZH ? "zh" : "en");
     set_busy(true);
+    if (!app_net_heap_ready(10 * 1024) ||
+        !app_net_acquire(APP_NET_WEATHER, 0)) {
+        s_geo_fail = true;
+        set_busy(false);
+        s_hold_off_us = esp_timer_get_time() + 15LL * 1000000;
+        return;
+    }
     radio_enter();
     int n = http_get(url, s_http, sizeof(s_http));
     char name[33] = { 0 };
     int32_t lat = 0, lon = 0;
     bool ok = n > 0 && parse_geo(s_http, name, sizeof(name), &lat, &lon);
     if (ok) {
+        app_prefs_t *p = app_prefs();
         ui_pixel_utf8_copy(p->wx_city, sizeof(p->wx_city), name);
         p->wx_lat_e4 = lat;
         p->wx_lon_e4 = lon;
         app_prefs_save();
+    } else {
+        ESP_LOGW(TAG, "geocode fail %.32s", q);
+        s_geo_fail = true;
+        set_busy(false);
     }
-    fetch_forecast();
     radio_leave();
+    app_net_release(APP_NET_WEATHER);
+    if (ok) fetch_forecast();
 }
 
 static bool due_now(const wx_snap_t *s)
@@ -949,15 +971,7 @@ static void wx_task(void *arg)
 {
     (void)arg;
     ESP_LOGI(TAG, "task running");
-    for (;;) {
-        if (s_die) {
-            s_task = NULL;
-            vTaskDelete(NULL);
-        }
-        if (s_paused || bsp_wifi_state() != BSP_WIFI_CONNECTED) {
-            vTaskDelay(pdMS_TO_TICKS(5000));
-            continue;
-        }
+    if (!s_paused && bsp_wifi_state() == BSP_WIFI_CONNECTED) {
         int req = s_req;
         s_req = 0;
         wx_snap_t snap;
@@ -970,27 +984,34 @@ static void wx_task(void *arg)
             fetch_geocode(q);
         } else if (req == 1 || due_now(&snap)) {
             fetch_forecast();
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(5000));
-            continue;
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
     }
+    ESP_LOGI(TAG, "task done stack=%u",
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+    s_task = NULL;
+    vTaskDelete(NULL);
 }
 
 void app_wx_start(void)
 {
-    if (s_task) return;
-    s_die = false;
+    if (s_task || s_paused || !bsp_wifi_enabled()) return;
     uint32_t now = xTaskGetTickCount();
     if (s_retry_at && now < s_retry_at) return;
     if (!s_mu) {
         s_mu = xSemaphoreCreateMutex();
         if (!s_mu) return;
     }
-    /* HTTP 占用后剩余堆很小,再开 4KB 天气任务会把请求处理打崩。 */
-    size_t blk = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-    if (blk < 8192) {
+    wx_snap_t snap;
+    xSemaphoreTake(s_mu, portMAX_DELAY);
+    snap = s_snap;
+    xSemaphoreGive(s_mu);
+    if (!s_req && !due_now(&snap)) return;
+    if (bsp_wifi_state() != BSP_WIFI_CONNECTED) {
+        bsp_wifi_radio_resume();
+        return;
+    }
+    /* BLE 在线时连续块常 <10KB,开任务也只会 skip fetch,反而把 min heap 打穿。 */
+    if (!app_net_heap_ready(12 * 1024)) {
         s_retry_at = now + pdMS_TO_TICKS(15000);
         return;
     }
@@ -1014,19 +1035,12 @@ void app_wx_pause(bool on)
 void app_wx_stop(void)
 {
     s_paused = true;
-    s_die = true;
-    for (int i = 0; i < 40 && s_task; i++) vTaskDelay(pdMS_TO_TICKS(25));
-    if (s_task) {
-        ESP_LOGW(TAG, "wx task force delete");
-        vTaskDelete(s_task);
-        s_task = NULL;
-    }
-    s_die = false;
 }
 
 static void apply_city(int i)
 {
     if (i < 0 || i >= CITY_N) i = 0;
+    s_geo_fail = false;
     app_prefs_t *p = app_prefs();
     ui_pixel_utf8_copy(p->wx_city, sizeof(p->wx_city), city_label(&CITIES[i]));
     p->wx_lat_e4 = CITIES[i].lat_e4;
@@ -1064,14 +1078,48 @@ bool app_wx_lock_line(char *out, size_t n)
     snap = s_snap;
     xSemaphoreGive(s_mu);
 
-    if (snap.ok == 1) {
-        snprintf(out, n, "%s  %d\xc2\xb0%s  %s",
-                 cname, disp_temp(snap.temp),
-                 p->wx_imperial ? "F" : "C",
-                 app_str(cond_id(snap.wmo)));
-    } else {
-        snprintf(out, n, "%s", cname);
-    }
+    if (snap.ok != 1) return false;
+    snprintf(out, n, "%s  %d\xc2\xb0%s  %s",
+             cname, disp_temp(snap.temp),
+             p->wx_imperial ? "F" : "C",
+             app_str(cond_id(snap.wmo)));
+    return true;
+}
+
+bool app_wx_brief(char *out, size_t n)
+{
+    if (!out || n == 0) return false;
+    out[0] = 0;
+    if (!bsp_wifi_enabled() || !s_mu) return false;
+    const app_prefs_t *p = app_prefs();
+    int ci = city_index();
+    const char *cname = ci >= 0 ? city_label(&CITIES[ci]) : p->wx_city;
+    wx_snap_t snap;
+    if (xSemaphoreTake(s_mu, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    snap = s_snap;
+    xSemaphoreGive(s_mu);
+    if (snap.ok != 1 || !cname[0]) return false;
+    snprintf(out, n, "%s %d\xc2\xb0", cname, disp_temp(snap.temp));
+    return true;
+}
+
+bool app_wx_lock_card(char *city, size_t cn, char *temp, size_t tn,
+                      char *sub, size_t sn)
+{
+    if (!city || !temp || !sub || cn == 0 || tn == 0 || sn == 0) return false;
+    city[0] = temp[0] = sub[0] = 0;
+    if (!bsp_wifi_enabled() || !s_mu) return false;
+    const app_prefs_t *p = app_prefs();
+    int ci = city_index();
+    const char *cname = ci >= 0 ? city_label(&CITIES[ci]) : p->wx_city;
+    wx_snap_t snap;
+    if (xSemaphoreTake(s_mu, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    snap = s_snap;
+    xSemaphoreGive(s_mu);
+    if (snap.ok != 1) return false;
+    ui_pixel_utf8_copy(city, cn, cname[0] ? cname : app_str(APP_STR_WX));
+    snprintf(temp, tn, "%d\xc2\xb0", disp_temp(snap.temp));
+    snprintf(sub, sn, "%s", app_str(cond_id(snap.wmo)));
     return true;
 }
 
@@ -1089,6 +1137,40 @@ static void fmt_iv(char *out, size_t n, uint16_t m)
 {
     if (m >= 60 && m % 60 == 0) snprintf(out, n, "%dh", m / 60);
     else snprintf(out, n, "%dm", m);
+}
+
+static void set_rows_hide(void)
+{
+    for (int i = 0; i < WX_SET_N; i++) {
+        if (s_set_rows[i]) lv_obj_add_flag(s_set_rows[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void set_row(int i, const char *label, const char *meta)
+{
+    if (i < 0 || i >= WX_SET_N || !s_card) return;
+    if (!s_set_rows[i]) {
+        s_set_rows[i] = app_ui_row(s_card, 0, 44 + i * 37, 200, 32);
+        s_set_labs[i] = lv_label_create(s_set_rows[i]);
+        lv_obj_set_style_text_font(s_set_labs[i], ui_pixel_font_14(), 0);
+        lv_obj_set_style_text_color(s_set_labs[i], lv_color_hex(UI_TEXT), 0);
+        lv_obj_align(s_set_labs[i], LV_ALIGN_LEFT_MID, 7, 0);
+        s_set_metas[i] = lv_label_create(s_set_rows[i]);
+        lv_obj_set_style_text_font(s_set_metas[i], ui_pixel_font_14(), 0);
+        lv_obj_set_style_text_color(s_set_metas[i], lv_color_hex(UI_MUTE), 0);
+        lv_obj_set_width(s_set_metas[i], 108);
+        lv_obj_set_style_text_align(s_set_metas[i], LV_TEXT_ALIGN_RIGHT, 0);
+        lv_label_set_long_mode(s_set_metas[i], LV_LABEL_LONG_CLIP);
+        lv_obj_align(s_set_metas[i], LV_ALIGN_RIGHT_MID, -7, 0);
+    }
+    lv_obj_remove_flag(s_set_rows[i], LV_OBJ_FLAG_HIDDEN);
+    bool selected = s_sel == i;
+    app_ui_select(s_set_rows[i], selected, HUD_CYAN);
+    lv_obj_set_style_text_color(s_set_labs[i], lv_color_hex(UI_TEXT), 0);
+    lv_obj_set_style_text_color(s_set_metas[i],
+                                lv_color_hex(selected ? UI_TEXT : HUD_MUTE), 0);
+    lv_label_set_text(s_set_labs[i], label);
+    lv_label_set_text(s_set_metas[i], meta);
 }
 
 static void wx_day_title(int off, char *out, size_t n)
@@ -1121,6 +1203,26 @@ static void wx_day_title(int off, char *out, size_t n)
     }
 }
 
+static void wx_day_short(int off, char *out, size_t n)
+{
+    if (off == 0) {
+        snprintf(out, n, "%s", app_lang() == APP_LANG_ZH ? "今" : "Now");
+        return;
+    }
+    if (off == 1) {
+        snprintf(out, n, "%s", app_lang() == APP_LANG_ZH ? "明" : "Next");
+        return;
+    }
+    time_t ts = time(NULL) + (time_t)off * 86400;
+    struct tm t;
+    localtime_r(&ts, &t);
+    static const char *const ZH[] = { "日", "一", "二", "三", "四", "五", "六" };
+    static const char *const EN[] = { "Su", "Mo", "Tu", "We", "Th", "Fr", "Sa" };
+    int w = t.tm_wday;
+    if (w < 0 || w > 6) w = 0;
+    snprintf(out, n, "%s", app_lang() == APP_LANG_ZH ? ZH[w] : EN[w]);
+}
+
 static void paint(void)
 {
     if (!s_hint || !s_body) return;
@@ -1131,27 +1233,29 @@ static void paint(void)
     xSemaphoreGive(s_mu);
 
     if (s_view == VIEW_KB) {
+        set_rows_hide();
+        if (s_body) lv_obj_add_flag(s_body, LV_OBJ_FLAG_HIDDEN);
+        if (s_hint) lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
         if (s_icon) lv_obj_add_flag(s_icon, LV_OBJ_FLAG_HIDDEN);
         if (s_temp) lv_obj_add_flag(s_temp, LV_OBJ_FLAG_HIDDEN);
-        char ip[20];
-        if (bsp_wifi_state() == BSP_WIFI_CONNECTED &&
-            bsp_wifi_ip(ip, sizeof(ip)) == ESP_OK &&
-            ip[0] && strcmp(ip, "0.0.0.0") != 0) {
-            lv_label_set_text_fmt(s_hint, app_str(APP_STR_WEB_IP), ip);
-        } else {
-            lv_label_set_text(s_hint, app_str(APP_STR_ANC_KB));
-        }
         if (s_title) lv_label_set_text(s_title, app_str(APP_STR_WX_CUSTOM));
-        char body[900];
-        app_kb_render(body, sizeof(body), app_str(APP_STR_WX_CITY),
-                      s_custom, s_kb_sel, s_kb_set);
-        lv_label_set_text(s_body, body);
+        bool wifi = bsp_wifi_state() == BSP_WIFI_CONNECTED;
+        app_kb_show(s_card, s_custom, s_kb_sel, s_kb_set,
+                    wifi ? APP_WEB_MINI_H + 6 : 4);
+        app_web_mini_qr_bind(s_card, &s_mini_qr, &s_mini_url);
+        app_web_mini_qr_show(s_mini_qr, s_mini_url, wifi);
         app_web_set_target("city", s_custom, sizeof(s_custom), paint);
         return;
     }
 
+    app_kb_hide();
+    if (s_hint) lv_obj_remove_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+
     app_web_clear_target();
+    app_web_mini_qr_show(s_mini_qr, s_mini_url, false);
+    if (s_body) lv_obj_set_height(s_body, LV_SIZE_CONTENT);
     if (s_view == VIEW_SET) {
+        lv_obj_add_flag(s_body, LV_OBJ_FLAG_HIDDEN);
         if (s_icon) lv_obj_add_flag(s_icon, LV_OBJ_FLAG_HIDDEN);
         if (s_temp) lv_obj_add_flag(s_temp, LV_OBJ_FLAG_HIDDEN);
         if (s_title) lv_label_set_text(s_title, app_str(APP_STR_WX_SET));
@@ -1161,25 +1265,18 @@ static void paint(void)
         const char *cname = ci >= 0 ? city_label(&CITIES[ci]) : p->wx_city;
         char iv[8];
         fmt_iv(iv, sizeof(iv), p->wx_interval);
-        char buf[420];
-        snprintf(buf, sizeof(buf),
-                 "%s %s  %s\n"
-                 "%s %s\n"
-                 "%s %s  %s\n"
-                 "%s %s  %s\n"
-                 "%s %s\n"
-                 "%s %s\n",
-                 s_sel == 0 ? ">" : " ", app_str(APP_STR_WX_CITY), cname,
-                 s_sel == 1 ? ">" : " ", app_str(APP_STR_WX_CUSTOM),
-                 s_sel == 2 ? ">" : " ", app_str(APP_STR_WX_INTERVAL), iv,
-                 s_sel == 3 ? ">" : " ", app_str(APP_STR_WX_UNITS),
-                 app_str(p->wx_imperial ? APP_STR_WX_IMPERIAL : APP_STR_WX_METRIC),
-                 s_sel == 4 ? ">" : " ", app_str(APP_STR_WX_REFRESH),
-                 s_sel == 5 ? ">" : " ", app_str(APP_STR_WX_DONE));
-        lv_label_set_text(s_body, buf);
+        set_row(0, app_str(APP_STR_WX_CITY), cname);
+        set_row(1, app_str(APP_STR_WX_CUSTOM), "KEYBOARD / QR");
+        set_row(2, app_str(APP_STR_WX_INTERVAL), iv);
+        set_row(3, app_str(APP_STR_WX_UNITS),
+                app_str(p->wx_imperial ? APP_STR_WX_IMPERIAL : APP_STR_WX_METRIC));
+        set_row(4, app_str(APP_STR_WX_REFRESH), "GO");
+        set_row(5, app_str(APP_STR_WX_DONE), "GO");
         return;
     }
 
+    set_rows_hide();
+    lv_obj_remove_flag(s_body, LV_OBJ_FLAG_HIDDEN);
     const app_prefs_t *p = app_prefs();
     int ci = city_index();
     const char *cname = ci >= 0 ? city_label(&CITIES[ci]) : p->wx_city;
@@ -1195,7 +1292,9 @@ static void paint(void)
             lv_label_set_text(s_title, cname[0] ? cname : app_str(APP_STR_WX));
         }
     }
-    if (bsp_wifi_state() != BSP_WIFI_CONNECTED) {
+    if (s_geo_fail && !snap.busy) {
+        lv_label_set_text(s_hint, app_str(APP_STR_WX_CITY_NOT_FOUND));
+    } else if (bsp_wifi_state() != BSP_WIFI_CONNECTED) {
         lv_label_set_text(s_hint, app_str(APP_STR_WX_NEED_WIFI));
     } else if (snap.busy) {
         lv_label_set_text(s_hint, app_str(APP_STR_WX_UPDATING));
@@ -1204,7 +1303,7 @@ static void paint(void)
     } else if (day_n > 1) {
         lv_label_set_text(s_hint, app_str(APP_STR_WX_HINT_DAYS));
     } else {
-        lv_label_set_text(s_hint, app_str(APP_STR_WX_HINT));
+        lv_label_set_text(s_hint, app_str(APP_STR_HINT_WX_SET));
     }
 
     if (s_icon) lv_obj_remove_flag(s_icon, LV_OBJ_FLAG_HIDDEN);
@@ -1259,15 +1358,29 @@ static void paint(void)
         char buf[420];
         if (now) {
             snprintf(buf, sizeof(buf),
-                     "%s\n%s  %d/%d\xc2\xb0\n%s  %s\n%s\n%s  %s\n",
+                     "[ %s ]\n----------------\n%s  %d/%d\xc2\xb0\n%s  %s\n%s\n%s  %s\n",
                      app_str(cond_id(wmo)),
                      feels, disp_temp(tmin), disp_temp(tmax),
                      hum, wind, uv,
                      app_str(APP_STR_WX_CLOTH),
                      app_str((app_str_id_t)(APP_STR_WX_CL0 + cl)));
+            size_t used = strlen(buf);
+            for (int i = 0; i < day_n && i < WX_DAYS && used + 24 < sizeof(buf); i++) {
+                if (!snap.day[i].ok) continue;
+                char day_s[8];
+                wx_day_short(i, day_s, sizeof(day_s));
+                int wrote = snprintf(buf + used, sizeof(buf) - used,
+                                     "%s %d/%d\xc2\xb0%s",
+                                     day_s,
+                                     disp_temp(snap.day[i].tmax),
+                                     disp_temp(snap.day[i].tmin),
+                                     (i % 2) ? "\n" : "  ");
+                if (wrote < 0 || (size_t)wrote >= sizeof(buf) - used) break;
+                used += (size_t)wrote;
+            }
         } else {
             snprintf(buf, sizeof(buf),
-                     "%s\n%d/%d\xc2\xb0\n%s\n%s\n%s  %s\n",
+                     "[ %s ]\n----------------\n%d/%d\xc2\xb0\n%s\n%s\n%s  %s\n",
                      app_str(cond_id(wmo)),
                      disp_temp(tmax), disp_temp(tmin),
                      wind, uv,
@@ -1298,7 +1411,7 @@ static void hold_tick(lv_timer_t *t)
 {
     (void)t;
     if (s_view != VIEW_KB || s_hold_btn < 0) return;
-    s_hold_ms += 80;
+    s_hold_ms += 120;
     if (s_hold_ms < 280) return;
     int dir = (s_hold_btn == BSP_BTN_UP) ? -1 : 1;
     int step = (s_hold_ms >= 800) ? KB_COLS : 1;
@@ -1306,18 +1419,43 @@ static void hold_tick(lv_timer_t *t)
     paint();
 }
 
+// 长按 OK 逐层退子视图,退到主视图再交给页栈。
+static bool wx_back(void)
+{
+    if (s_view == VIEW_KB) {
+        s_view = VIEW_SET;
+        app_web_qr_close();
+    } else if (s_view == VIEW_SET) {
+        s_view = VIEW_MAIN;
+    } else {
+        return false;
+    }
+    paint();
+    return true;
+}
+
 void app_wx_enter(lv_obj_t *p)
 {
+    app_shell_set_back(wx_back);
     s_view = VIEW_MAIN;
     s_sel = 0;
     s_day = 0;
     s_icon_wmo = -1;
     s_custom[0] = 0;
     lv_obj_t *card = app_ui_card(p);
+    s_card = card;
+    lv_obj_set_style_bg_color(card, lv_color_hex(HUD_BG), 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    s_mini_qr = s_mini_url = NULL;
+    memset(s_set_rows, 0, sizeof(s_set_rows));
+    memset(s_set_labs, 0, sizeof(s_set_labs));
+    memset(s_set_metas, 0, sizeof(s_set_metas));
     s_title = app_ui_title(card, app_str(APP_STR_WX));
+    lv_obj_set_style_text_color(s_title, lv_color_hex(UI_TEXT), 0);
     lv_obj_set_width(s_title, 200);
     lv_label_set_long_mode(s_title, LV_LABEL_LONG_CLIP);
     s_hint = app_ui_hint(card);
+    lv_obj_set_style_text_color(s_hint, lv_color_hex(HUD_MUTE), 0);
     s_icon = lv_obj_create(card);
     ui_pixel_strip_theme(s_icon);
     lv_obj_set_pos(s_icon, 0, 48);
@@ -1325,11 +1463,20 @@ void app_wx_enter(lv_obj_t *p)
     lv_obj_set_style_bg_opa(s_icon, LV_OPA_TRANSP, 0);
     s_temp = lv_label_create(card);
     lv_obj_set_style_text_font(s_temp, ui_pixel_font_20(), 0);
-    lv_obj_set_style_text_color(s_temp, lv_color_hex(UI_INK), 0);
+    lv_obj_set_style_text_color(s_temp, lv_color_hex(UI_TEXT), 0);
+    lv_obj_set_style_border_width(s_temp, 0, 0);
+    lv_obj_set_style_pad_hor(s_temp, 0, 0);
+    lv_obj_set_style_pad_ver(s_temp, 0, 0);
     lv_obj_align(s_temp, LV_ALIGN_TOP_LEFT, 48, 52);
     s_body = app_ui_body(card, 92);
+    lv_obj_set_style_text_color(s_body, lv_color_hex(UI_TEXT), 0);
+    lv_obj_set_style_bg_opa(s_body, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_body, lv_color_hex(HUD_PANEL), 0);
+    lv_obj_set_style_border_width(s_body, 0, 0);
+    lv_obj_set_style_radius(s_body, UI_RADIUS, 0);
+    lv_obj_set_style_pad_all(s_body, 8, 0);
     s_timer = lv_timer_create(tick, 1000, NULL);
-    s_hold_timer = lv_timer_create(hold_tick, 80, NULL);
+    s_hold_timer = lv_timer_create(hold_tick, 120, NULL);
     if (s_mu) {
         wx_snap_t snap;
         xSemaphoreTake(s_mu, portMAX_DELAY);
@@ -1349,7 +1496,12 @@ void app_wx_exit(void)
     if (s_hold_timer) { lv_timer_delete(s_hold_timer); s_hold_timer = NULL; }
     app_web_clear_target();
     app_web_qr_close();
+    app_kb_hide();
     s_title = s_hint = s_body = s_icon = s_temp = NULL;
+    s_card = s_mini_qr = s_mini_url = NULL;
+    memset(s_set_rows, 0, sizeof(s_set_rows));
+    memset(s_set_labs, 0, sizeof(s_set_labs));
+    memset(s_set_metas, 0, sizeof(s_set_metas));
 }
 
 static void do_set(void)
@@ -1359,6 +1511,7 @@ static void do_set(void)
         int i = city_index();
         apply_city((i < 0 ? 0 : i + 1) % CITY_N);
     } else if (s_sel == 1) {
+        s_geo_fail = false;
         s_view = VIEW_KB;
         s_kb_sel = 0;
         s_kb_set = 0;

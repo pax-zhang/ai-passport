@@ -2,6 +2,7 @@
 #include "app_i18n.h"
 #include "app_logic.h"
 #include "app_ui.h"
+#include "ui_pixel.h"
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -11,7 +12,7 @@
 #include <string.h>
 
 #define WIN 11
-#define SEP "--------------------"
+#define SEP "--//----------------"
 
 static app_dlog_t s_dlog;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -22,6 +23,7 @@ static lv_obj_t *s_title, *s_hint, *s_body;
 static lv_timer_t *s_timer;
 static int s_top;
 static bool s_follow;
+static bool s_clear_ask;
 
 static int hook(const char *fmt, va_list ap)
 {
@@ -104,7 +106,8 @@ static void paint(void)
     portEXIT_CRITICAL(&s_mux);
 
     lv_label_set_text(s_hint, n == 0 ? app_str(APP_STR_LOG_NONE)
-                                     : app_str(APP_STR_LOG_HINT));
+                                     : (s_clear_ask ? app_str(APP_STR_HINT_CLEAR)
+                                                    : app_str(APP_STR_LOG_HINT)));
 
     char buf[WIN * (APP_DLOG_W + sizeof(SEP)) + 8];
     size_t o = 0;
@@ -138,11 +141,16 @@ void app_logs_enter(lv_obj_t *p)
 {
     s_follow = true;
     s_top = 0;
+    s_clear_ask = false;
     lv_obj_t *card = app_ui_card(p);
     s_title = app_ui_title(card, app_str(APP_STR_LOG));
     s_hint = app_ui_hint(card);
     s_body = app_ui_body(card, 48);
+    lv_obj_set_style_text_color(s_title, lv_color_hex(UI_TEXT), 0);
+    lv_obj_set_style_text_color(s_hint, lv_color_hex(UI_MUTE), 0);
+    lv_obj_set_style_text_color(s_body, lv_color_hex(UI_TEXT), 0);
     lv_label_set_long_mode(s_body, LV_LABEL_LONG_CLIP);
+
     s_timer = lv_timer_create(tick, 400, NULL);
     paint();
 }
@@ -158,14 +166,21 @@ void app_logs_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     if (ev != BSP_BTN_CLICK) return;
 
     if (btn == BSP_BTN_OK) {
+        if (!s_clear_ask) {
+            s_clear_ask = true;
+            paint();
+            return;
+        }
         portENTER_CRITICAL(&s_mux);
         app_dlog_clear(&s_dlog);
         portEXIT_CRITICAL(&s_mux);
         s_follow = true;
         s_top = 0;
+        s_clear_ask = false;
         paint();
         return;
     }
+    s_clear_ask = false;
 
     portENTER_CRITICAL(&s_mux);
     int n = app_dlog_count(&s_dlog);

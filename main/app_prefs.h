@@ -18,6 +18,9 @@ typedef struct {
     uint16_t sleep_sec;   // 0 = never
     uint8_t lock_on;      // 1 = show lock after sleep/idle
     uint8_t lock_stay;    // 1 = keep backlight on while locked
+    uint8_t lock_time;    // 1 = show clock on lock screen
+    uint8_t lock_wx;      // 1 = show weather on lock screen
+    uint8_t lock_quote;   // 1 = show verse on lock screen
     uint8_t volume;       // 0..100, step 10
     uint8_t muted;        // 1 = silence all output
     uint8_t tone_msg;
@@ -31,17 +34,20 @@ typedef struct {
     int32_t wx_lon_e4;    // longitude * 10000
     uint16_t wx_interval; // minutes: 15/30/60/180
     uint8_t wx_imperial;  // 0 = C/kmh, 1 = F/mph
-    uint8_t walkie_ch;    // 1..8
-    uint8_t walkie_mode;  // 0 = WebRTC/Wi-Fi, 1 = BLE
-    uint8_t meow_bed;     // 0..23, default 21
-    uint8_t meow_wake;    // 0..23, default 8; equal to bed = no night sleep
+    uint8_t meow_bed;     // 0..23 DND start, default 21
+    uint8_t meow_wake;    // 0..23 DND end, default 8; equal to bed = off
     uint8_t ota_auto;     // 1 = check for updates in background
+    uint8_t theme;
+    uint8_t notif_def;    // 未命中规则时的档位,含 APP_ALERT_DROP
+    uint8_t kw_ver;       // 规则语义版本,见 APP_RULE_VER
     uint8_t kw_n;
     app_kw_t kw[APP_KW_MAX];
 } app_prefs_t;
 
 void app_prefs_load(void);
 void app_prefs_save(void);
+void app_prefs_flush(void);
+void app_prefs_tick(void);
 void app_prefs_save_lang(void);
 app_prefs_t *app_prefs(void);
 app_totp_list_t *app_totp_store(void);

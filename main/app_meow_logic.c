@@ -1,4 +1,5 @@
 #include "app_meow.h"
+#include "app_logic.h"
 
 #include <string.h>
 
@@ -548,12 +549,7 @@ static void hatch_now(app_meow_t *p)
 
 bool app_meow_asleep_at(int hour, int bed, int wake)
 {
-    if (hour < 0 || hour > 23) return false;
-    if (bed < 0 || bed > 23) bed = APP_MEOW_BED_HOUR;
-    if (wake < 0 || wake > 23) wake = APP_MEOW_WAKE_HOUR;
-    if (bed == wake) return false;
-    if (bed < wake) return hour >= bed && hour < wake;
-    return hour >= bed || hour < wake;
+    return app_dnd_in_range(hour, bed, wake);
 }
 
 static void one_min(app_meow_t *p, int hour, int bed, int wake)

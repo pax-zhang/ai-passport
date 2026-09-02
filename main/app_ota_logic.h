@@ -10,7 +10,7 @@
 #define APP_OTA_CHANNEL_MAX 48
 
 #ifndef APP_OTA_CHANNEL
-#define APP_OTA_CHANNEL "demo/meow"
+#define APP_OTA_CHANNEL "demo/iphone"
 #endif
 /* 清单在通道同名 git 分支上，不看 main。 */
 #ifndef APP_OTA_REF

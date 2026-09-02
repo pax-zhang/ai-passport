@@ -47,3 +47,6 @@ void bsp_lvgl_tick_enable(bool on);
 // 暂停/恢复往 LCD 刷帧。LVGL 定时器仍跑(shell/通知),只是不 SPI 传输。
 void bsp_lvgl_pause(void);
 void bsp_lvgl_resume(void);
+
+// USB 串口 FAP_SCREENSHOT_V1:读当前画面,不改设置、不复位。须在 LVGL 就绪后调用。
+void bsp_screenshot_start(void);

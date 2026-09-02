@@ -15,7 +15,7 @@
 
 #define SAMPLE_RATE 16000
 #define CHUNK       256
-/* codec open + I2S write needs the same 4 KB stack as demo_audio / walkie */
+/* codec open + I2S write needs the same 4 KB stack as demo_audio */
 #define STACK_BYTES 4096
 
 typedef struct {

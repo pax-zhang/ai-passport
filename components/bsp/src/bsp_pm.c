@@ -1,4 +1,5 @@
 #include "bsp_pm.h"
+#include "bsp_ble.h"
 
 #include "esp_log.h"
 #include "esp_pm.h"
@@ -15,7 +16,7 @@ static void apply(void)
     esp_pm_config_t cfg = {
         .max_freq_mhz = 160,
         .min_freq_mhz = (s_sleeping || !s_perf) ? 40 : 80,
-        .light_sleep_enable = s_sleeping,
+        .light_sleep_enable = s_sleeping && !bsp_ble_stack_up(),
     };
     esp_err_t e = esp_pm_configure(&cfg);
     if (e != ESP_OK && cfg.min_freq_mhz == 40) {

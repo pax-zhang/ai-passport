@@ -1,60 +1,75 @@
 #include "app.h"
 #include "app_i18n.h"
+#include "app_meow_set.h"
+#include "app_ota.h"
 #include "app_prefs.h"
 #include "app_ui.h"
+#include "bsp_ble.h"
+#include "bsp_wifi.h"
 #include "ui_pixel.h"
 
 #include <stdio.h>
+#include <string.h>
 
-static lv_obj_t *s_title, *s_hint, *s_body, *s_credit;
+#define N 10
+#define VISIBLE_N 6
+
+static lv_obj_t *s_title, *s_hint;
 static lv_timer_t *s_lang_timer;
-static int s_sel;
+static bool s_open;
+static app_row_t s_rows[N];
+static char s_meta[N][40];
 
-#define N 8
+static const app_str_id_t SET_STR[N] = {
+    APP_STR_LANGUAGE, APP_STR_WIFI, APP_STR_BLUETOOTH,
+    APP_STR_DATETIME, APP_STR_SCREEN, APP_STR_LOCK, APP_STR_SOUND, APP_STR_UPDATE,
+    APP_STR_HARDWARE, APP_STR_LOG
+};
 
-static const char *item_label(int i)
+static const meow_set_id_t SET_MAP[7] = {
+    MEOW_SET_WIFI, MEOW_SET_BLE, MEOW_SET_CLOCK,
+    MEOW_SET_SCREEN, MEOW_SET_LOCK, MEOW_SET_SOUND, MEOW_SET_OTA
+};
+
+static void meta_text(int i, char *out, size_t n)
 {
-    switch (i) {
-    case 0: return app_str(APP_STR_LANGUAGE);
-    case 1: return app_str(APP_STR_WIFI);
-    case 2: return app_str(APP_STR_BLUETOOTH);
-    case 3: return app_str(APP_STR_DATETIME);
-    case 4: return app_str(APP_STR_SCREEN);
-    case 5: return app_str(APP_STR_SOUND);
-    case 6: return app_str(APP_STR_HARDWARE);
-    default: return app_str(APP_STR_LOG);
+    if (i == 0) snprintf(out, n, "%s", app_lang_name(app_lang()));
+    else if (i == 1) snprintf(out, n, "%s", app_str_onoff(bsp_wifi_enabled()));
+    else if (i == 2) snprintf(out, n, "%s", app_str_onoff(bsp_ble_enabled()));
+    else if (i == 3) snprintf(out, n, "%s", app_str(APP_STR_NTP));
+    else if (i == 4) snprintf(out, n, "%s", app_str(APP_STR_SET_SCR_META));
+    else if (i == 5) snprintf(out, n, "%s", app_str(APP_STR_SET_LOCK_META));
+    else if (i == 6) snprintf(out, n, "%s", app_str(APP_STR_SET_SND_META));
+    else if (i == 7) snprintf(out, n, "v%s", app_ota_cur_ver());
+    else if (i == 8) snprintf(out, n, "ESP32-C3");
+    else snprintf(out, n, "%s", app_str(APP_STR_SET_LOG_META));
+}
+
+static void build_rows(void)
+{
+    memset(s_rows, 0, sizeof(s_rows));
+    for (int i = 0; i < N; i++) {
+        meta_text(i, s_meta[i], sizeof(s_meta[i]));
+        s_rows[i].kind = i == 0 ? APP_ROW_CHOICE : APP_ROW_ACTION;
+        s_rows[i].label = app_str(SET_STR[i]);
+        s_rows[i].value = s_meta[i];
     }
 }
 
 static void paint(void)
 {
+    if (app_meow_set_open_now()) return;
+    if (s_title && !lv_obj_is_valid(s_title)) s_title = NULL;
+    if (s_hint && !lv_obj_is_valid(s_hint)) s_hint = NULL;
     if (s_title) lv_label_set_text(s_title, app_str(APP_STR_SETTINGS));
-    if (s_hint) lv_label_set_text(s_hint, app_str(APP_STR_HINT_OPEN));
-    if (!s_body) return;
-
-    char buf[400];
-    size_t o = 0;
-    buf[0] = 0;
-    int window = 7;
-    if (s_sel >= N) s_sel = N - 1;
-    int start = s_sel - window / 2;
-    if (start < 0) start = 0;
-    if (start + window > N) start = N > window ? N - window : 0;
-    for (int i = start; i < N && i < start + window; i++) {
-        int w;
-        if (i == 0) {
-            w = snprintf(buf + o, sizeof(buf) - o, "%s %s  %s\n",
-                         i == s_sel ? ">" : " ", item_label(i),
-                         app_lang_name(app_lang()));
-        } else {
-            w = snprintf(buf + o, sizeof(buf) - o, "%s %s\n",
-                         i == s_sel ? ">" : " ", item_label(i));
-        }
-        if (w < 0) break;
-        o += (size_t)w;
-        if (o >= sizeof(buf)) break;
+    const app_list_t *l = app_shell_list();
+    int sel = l ? l->sel : 0;
+    if (s_hint) {
+        lv_label_set_text(s_hint, sel == 0 ? app_str(APP_STR_HINT_CYCLE)
+                                           : app_str(APP_STR_HINT_OPEN));
     }
-    lv_label_set_text(s_body, buf);
+    build_rows();
+    app_ui_list_render(s_rows, app_shell_list());
 }
 
 static void lang_apply(lv_timer_t *t)
@@ -62,62 +77,70 @@ static void lang_apply(lv_timer_t *t)
     (void)t;
     s_lang_timer = NULL;
     app_prefs_save_lang();
+    if (!s_open || app_meow_set_open_now()) return;
     paint();
 }
 
 void app_settings_enter(lv_obj_t *p)
 {
-    lv_obj_t *card = app_ui_card(p);
-    s_title = app_ui_title(card, app_str(APP_STR_SETTINGS));
-    s_hint = app_ui_hint(card);
-    s_body = app_ui_body(card, 48);
-    s_credit = lv_label_create(card);
-    lv_obj_set_style_text_font(s_credit, ui_pixel_font_14(), 0);
-    lv_obj_set_style_text_color(s_credit, lv_color_hex(UI_SKY_DARK), 0);
-    lv_label_set_text(s_credit, "Powered By Pax-z");
-    lv_obj_align(s_credit, LV_ALIGN_BOTTOM_MID, 0, 0);
-    if (s_sel < 0 || s_sel >= N) s_sel = 0;
+    s_open = true;
+    app_ui_screen_style(p);
+    s_title = app_ui_page_title(p, app_str(APP_STR_SETTINGS));
+    s_hint = app_ui_footer(p, app_str(APP_STR_HINT_OPEN));
+    build_rows();
+    app_list_keep(app_shell_list(), s_rows, N, VISIBLE_N);
+    app_ui_list_bind(p, 28, APP_BODY_H - 50, VISIBLE_N);
     paint();
 }
 
 void app_settings_exit(void)
 {
+    app_meow_set_close();
     if (s_lang_timer) {
         lv_timer_delete(s_lang_timer);
         s_lang_timer = NULL;
         app_prefs_save_lang();
     }
-    s_title = s_hint = s_body = s_credit = NULL;
+    s_title = s_hint = NULL;
+    s_open = false;
+    if (bsp_ble_enabled() && !bsp_ble_stack_up() && !app_ota_busy())
+        bsp_ble_resume();
+}
+
+bool app_settings_open_now(void)
+{
+    return s_open;
 }
 
 void app_settings_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 {
+    if (app_meow_set_open_now()) return;
     if (ev != BSP_BTN_CLICK) return;
-    if (btn == BSP_BTN_UP) { app_ui_move(&s_sel, N, -1); paint(); return; }
-    if (btn == BSP_BTN_DOWN) { app_ui_move(&s_sel, N, 1); paint(); return; }
+    if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) {
+        app_list_move(app_shell_list(), s_rows, btn == BSP_BTN_UP ? -1 : 1);
+        paint();
+        return;
+    }
     if (btn != BSP_BTN_OK) return;
-    switch (s_sel) {
-    case 0: {
+    const app_list_t *l = app_shell_list();
+    int sel = l ? l->sel : 0;
+    if (sel == 0) {
         app_prefs_t *p = app_prefs();
         p->lang = (uint8_t)((p->lang + 1) % APP_LANG_N);
         app_lang_set((app_lang_t)p->lang);
-        /* 按键回调跑在 button/esp_timer 小栈上。中文 glyph 排版和 NVS
-         * 都放到 LVGL 任务里做,避免卡死。 */
         if (s_lang_timer) {
             lv_timer_reset(s_lang_timer);
         } else {
             s_lang_timer = lv_timer_create(lang_apply, 20, NULL);
             lv_timer_set_repeat_count(s_lang_timer, 1);
         }
-        break;
+        paint();
+        return;
     }
-    case 1: app_shell_open(app_wifi_enter, app_wifi_exit, app_wifi_key); break;
-    case 2: app_shell_open(app_ble_enter, app_ble_exit, app_ble_key); break;
-    case 3: app_shell_open(app_clock_enter, app_clock_exit, app_clock_key); break;
-    case 4: app_shell_open(app_screen_enter, app_screen_exit, app_screen_key); break;
-    case 5: app_shell_open(app_sound_enter, app_sound_exit, app_sound_key); break;
-    case 6: app_shell_open(app_hw_enter, app_hw_exit, app_hw_key); break;
-    case 7: app_shell_open(app_logs_enter, app_logs_exit, app_logs_key); break;
-    default: break;
+    if (sel >= 1 && sel <= 7) {
+        app_meow_set_open(app_shell_screen(), SET_MAP[sel - 1]);
+        return;
     }
+    if (sel == 8) app_shell_open(app_hw_enter, app_hw_exit, app_hw_key);
+    else if (sel == 9) app_shell_open(app_logs_enter, app_logs_exit, app_logs_key);
 }

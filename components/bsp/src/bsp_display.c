@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <string.h>
 
 static const char *TAG = "bsp_disp";
 
@@ -129,6 +130,12 @@ esp_err_t bsp_display_init(void) {
     esp_lcd_panel_mirror(s_panel, false, false);                 // 0x36 MADCTL:本板不需镜像(XY 双镜像 = 画面 180°)
     esp_lcd_panel_set_gap(s_panel, 0, 0);
     esp_lcd_panel_disp_on_off(s_panel, true);                    // 0x29 DISPON
+
+    uint16_t line[BSP_LCD_W];
+    memset(line, 0, sizeof(line));
+    for (int y = 0; y < BSP_LCD_H; y++) {
+        esp_lcd_panel_draw_bitmap(s_panel, 0, y, BSP_LCD_W, y + 1, line);
+    }
 
     backlight_init();
     ESP_LOGI(TAG, "显示就绪 %dx%d", BSP_LCD_W, BSP_LCD_H);

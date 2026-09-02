@@ -1,12 +1,91 @@
 #include "ui_pixel.h"
 
+#include "app_i18n.h"
+
 #include <string.h>
+
+extern const uint8_t bg_anime_bin_start[] asm("_binary_bg_anime_bin_start");
+extern const uint8_t bg_geek_bin_start[] asm("_binary_bg_geek_bin_start");
+extern const uint8_t bg_ink_bin_start[] asm("_binary_bg_ink_bin_start");
+extern const uint8_t bg_pop_bin_start[] asm("_binary_bg_pop_bin_start");
+
+static int s_theme_id = UI_ST_GEEK;
+static const app_str_id_t THEME_NAME[UI_THEME_N] = {
+    APP_STR_THEME_INK, APP_STR_THEME_PLASMA, APP_STR_THEME_PAPER,
+    APP_STR_THEME_ABYSS, APP_STR_THEME_EMBER,
+};
+
+typedef struct {
+    uint32_t bg, card, text, mute, line, accent, fill, on;
+} style_pal_t;
+
+static const style_pal_t PALS[UI_THEME_N] = {
+    { 0xFFF4F8, 0xFFFFFF, 0x3A2048, 0xA87890, 0xFFB0C8, 0xFF6B9A, 0xFFE0EC, 0xFFFFFF },
+    { 0x0A0C0A, 0x101410, 0xB8FF9A, 0x5A7A50, 0x3A5A32, 0x7CFF4A, 0x1A2A14, 0x0A0C0A },
+    { 0xF3E6C8, 0xFBF1D8, 0x2A1810, 0x8A7060, 0xC4A070, 0xC41E3A, 0xE8D4A8, 0xFBF1D8 },
+    { 0xFFFFFF, 0xFFFFFF, 0x09090B, 0x71717A, 0xE4E4E7, 0x09090B, 0xF4F4F5, 0xFFFFFF },
+    { 0xFFE600, 0xFFE600, 0x111111, 0x111111, 0x111111, 0xFF2D95, 0x00E8FF, 0xFFFFFF },
+};
+
+static int pal_id(void)
+{
+    return (s_theme_id >= 0 && s_theme_id < UI_THEME_N) ? s_theme_id : UI_ST_GEEK;
+}
+
+uint32_t ui_style_bg(void) { return PALS[pal_id()].bg; }
+uint32_t ui_style_card(void) { return PALS[pal_id()].card; }
+uint32_t ui_style_text(void) { return PALS[pal_id()].text; }
+uint32_t ui_style_mute(void) { return PALS[pal_id()].mute; }
+uint32_t ui_style_line(void) { return PALS[pal_id()].line; }
+uint32_t ui_style_accent(void) { return PALS[pal_id()].accent; }
+uint32_t ui_style_fill(void) { return PALS[pal_id()].fill; }
+uint32_t ui_style_on(void) { return PALS[pal_id()].on; }
+
+uint32_t ui_style_urgent(void)
+{
+    switch (pal_id()) {
+    case UI_ST_ANIME:
+        return 0xFF6B9A;
+    case UI_ST_INK:
+        return 0xC41E3A;
+    case UI_ST_MINI:
+        return 0x09090B;
+    case UI_ST_POP:
+        return 0xFF2D95;
+    default:
+        return 0x7CFF4A;
+    }
+}
+
+int ui_theme_id(void)
+{
+    return s_theme_id;
+}
+
+int ui_theme_count(void)
+{
+    return UI_THEME_N;
+}
+
+void ui_theme_set(int id)
+{
+    if (id < 0 || id >= UI_THEME_N) id = UI_ST_GEEK;
+    s_theme_id = id;
+    ui_pixel_theme_init();
+}
+
+const char *ui_theme_name(int id)
+{
+    if (id < 0 || id >= UI_THEME_N) id = UI_ST_GEEK;
+    return app_str(THEME_NAME[id]);
+}
 
 LV_FONT_DECLARE(lv_font_cjk_12);
 
 static lv_font_t s_font_14;
 static lv_font_t s_font_20;
 static lv_font_t s_cjk_title;
+static lv_font_t s_cjk_body;
 static bool s_fonts_ready;
 
 /* 点阵放大共用暂存。LVGL 单线程绘制,CJK 2x 与时钟 4x 不会重入。 */
@@ -15,12 +94,37 @@ static uint8_t s_scale_src[64 * 24];
 /* 12px 点阵放大一倍给 20px 标题用。必须返回 lv_draw_buf_t*,不能返回像素指针,
  * 否则 LVGL9 会把像素当 draw_buf 解引用 → 黑屏。内层 bitmap 也必须走
  * lv_font_cjk_12(fmt_txt),不能再指向 s_cjk_title,否则递归。 */
+static bool cjk_body_dsc(const lv_font_t *font, lv_font_glyph_dsc_t *dsc,
+                         uint32_t letter, uint32_t next)
+{
+    (void)font;
+    if (letter > 0x10FFFF || !dsc || !lv_font_cjk_12.get_glyph_dsc ||
+        !lv_font_cjk_12.get_glyph_dsc(&lv_font_cjk_12, dsc, letter, next)) {
+        if (dsc) {
+            dsc->box_w = 0;
+            dsc->box_h = 0;
+        }
+        return false;
+    }
+    if (dsc->box_w > 24 || dsc->box_h > 24) {
+        dsc->box_w = 0;
+        dsc->box_h = 0;
+        return false;
+    }
+    return true;
+}
+
 static bool cjk_title_dsc(const lv_font_t *font, lv_font_glyph_dsc_t *dsc,
                           uint32_t letter, uint32_t next)
 {
     (void)font;
-    if (!lv_font_cjk_12.get_glyph_dsc ||
-        !lv_font_cjk_12.get_glyph_dsc(&lv_font_cjk_12, dsc, letter, next)) {
+    if (letter > 0x10FFFF || !dsc || !lv_font_cjk_12.get_glyph_dsc ||
+        !lv_font_cjk_12.get_glyph_dsc(&lv_font_cjk_12, dsc, letter, next) ||
+        dsc->box_w > 24 || dsc->box_h > 24) {
+        if (dsc) {
+            dsc->box_w = 0;
+            dsc->box_h = 0;
+        }
         return false;
     }
     dsc->adv_w = (uint16_t)(dsc->adv_w * 2);
@@ -76,7 +180,7 @@ static const void *cjk_title_bitmap(lv_font_glyph_dsc_t *g_dsc, lv_draw_buf_t *d
     return draw_buf;
 }
 
-#define CLOCK_SCALE 4
+#define CLOCK_SCALE 2
 
 static int clock4x_advance(uint32_t letter, uint32_t next)
 {
@@ -181,7 +285,10 @@ void ui_pixel_fonts_init(void)
 {
     if (s_fonts_ready) return;
     s_font_14 = lv_font_montserrat_14;
-    s_font_14.fallback = &lv_font_cjk_12;
+    s_cjk_body = lv_font_cjk_12;
+    s_cjk_body.get_glyph_dsc = cjk_body_dsc;
+    s_cjk_body.fallback = NULL;
+    s_font_14.fallback = &s_cjk_body;
 
     s_cjk_title = lv_font_cjk_12;
     s_cjk_title.get_glyph_dsc = cjk_title_dsc;
@@ -208,6 +315,11 @@ const lv_font_t *ui_pixel_font_20(void)
     return s_fonts_ready ? &s_font_20 : &lv_font_montserrat_20;
 }
 
+const lv_font_t *ui_pixel_font_cjk(void)
+{
+    return s_fonts_ready ? &s_cjk_body : &lv_font_cjk_12;
+}
+
 void ui_pixel_utf8_copy(char *dst, size_t dst_n, const char *src)
 {
     if (!dst || dst_n == 0) return;
@@ -230,16 +342,149 @@ void ui_pixel_utf8_copy(char *dst, size_t dst_n, const char *src)
     dst[o] = 0;
 }
 
-static void start_blink(lv_obj_t *eye);
+static lv_obj_t *s_wall, *s_wash;
+static lv_image_dsc_t s_dsc_anime, s_dsc_geek, s_dsc_ink, s_dsc_pop;
+static bool s_dsc_ready;
+
+static void dsc_init(void)
+{
+    if (s_dsc_ready) return;
+    s_dsc_anime.header.magic = LV_IMAGE_HEADER_MAGIC;
+    s_dsc_anime.header.cf = LV_COLOR_FORMAT_RGB565;
+    s_dsc_anime.header.w = 240;
+    s_dsc_anime.header.h = 320;
+    s_dsc_anime.header.stride = 480;
+    s_dsc_anime.data_size = 240 * 320 * 2;
+    s_dsc_anime.data = bg_anime_bin_start;
+    s_dsc_geek = s_dsc_anime;
+    s_dsc_geek.data = bg_geek_bin_start;
+    s_dsc_ink = s_dsc_anime;
+    s_dsc_ink.data = bg_ink_bin_start;
+    s_dsc_pop = s_dsc_anime;
+    s_dsc_pop.data = bg_pop_bin_start;
+    s_dsc_ready = true;
+}
+
+static const lv_image_dsc_t *wall_dsc(void)
+{
+    dsc_init();
+    switch (pal_id()) {
+    case UI_ST_ANIME:
+        return &s_dsc_anime;
+    case UI_ST_GEEK:
+        return &s_dsc_geek;
+    case UI_ST_INK:
+        return &s_dsc_ink;
+    case UI_ST_POP:
+        return &s_dsc_pop;
+    default:
+        return NULL;
+    }
+}
+
+static lv_opa_t wash_opa(void)
+{
+    switch (pal_id()) {
+    case UI_ST_ANIME:
+        return LV_OPA_40;
+    case UI_ST_GEEK:
+        return LV_OPA_50;
+    case UI_ST_INK:
+        return LV_OPA_40;
+    default:
+        return LV_OPA_TRANSP;
+    }
+}
+
+static void wallpaper_paint(void)
+{
+    const lv_image_dsc_t *d = wall_dsc();
+    lv_opa_t wash = wash_opa();
+    if (s_wall) {
+        if (d) {
+            lv_image_set_src(s_wall, d);
+            lv_obj_remove_flag(s_wall, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_wall, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (s_wash) {
+        lv_obj_set_style_bg_color(s_wash, lv_color_hex(ui_style_bg()), 0);
+        lv_obj_set_style_bg_opa(s_wash, wash, 0);
+        if (wash == LV_OPA_TRANSP) lv_obj_add_flag(s_wash, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_remove_flag(s_wash, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void ui_pixel_glass(lv_obj_t *obj)
+{
+    if (!obj) return;
+    lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(obj, 0, 0);
+}
+
+void ui_pixel_wallpaper_attach(lv_obj_t *scr)
+{
+    if (!scr) return;
+    dsc_init();
+    if (!s_wall) {
+        s_wall = lv_image_create(scr);
+        lv_obj_remove_flag(s_wall, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_pos(s_wall, 0, 0);
+        lv_obj_set_size(s_wall, 240, 320);
+    }
+    if (!s_wash) {
+        s_wash = lv_obj_create(scr);
+        ui_pixel_strip_theme(s_wash);
+        lv_obj_remove_flag(s_wash, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_pos(s_wash, 0, 0);
+        lv_obj_set_size(s_wash, 240, 320);
+    }
+    wallpaper_paint();
+}
+
+void ui_pixel_theme_init(void)
+{
+    lv_display_t *d = lv_display_get_default();
+    if (!d) return;
+    lv_display_set_theme(d, NULL);
+
+    lv_obj_t *scr = lv_screen_active();
+    if (scr) {
+        lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(scr, lv_color_hex(ui_style_bg()), 0);
+    }
+    lv_obj_t *bot = lv_display_get_layer_bottom(d);
+    if (bot) {
+        lv_obj_set_style_bg_opa(bot, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(bot, lv_color_hex(ui_style_bg()), 0);
+    }
+    lv_obj_t *top = lv_display_get_layer_top(d);
+    if (top) {
+        lv_obj_set_style_bg_opa(top, LV_OPA_TRANSP, 0);
+    }
+    wallpaper_paint();
+}
 
 void ui_pixel_strip_theme(lv_obj_t *obj)
 {
     if (!obj) return;
     lv_obj_remove_style_all(obj);
     lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_radius(obj, 0, 0);
+    lv_obj_set_style_clip_corner(obj, false, 0);
     lv_obj_set_style_border_width(obj, 0, 0);
+    lv_obj_set_style_border_opa(obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_outline_width(obj, 0, 0);
+    lv_obj_set_style_shadow_width(obj, 0, 0);
+    lv_obj_set_style_shadow_opa(obj, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_opa(obj, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(obj, 0, 0);
+    lv_obj_set_style_pad_row(obj, 0, 0);
+    lv_obj_set_style_pad_column(obj, 0, 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(ui_style_bg()), 0);
 }
 
 static lv_obj_t *block(lv_obj_t *parent, int x, int y, int w, int h, uint32_t color)
@@ -253,6 +498,11 @@ static lv_obj_t *block(lv_obj_t *parent, int x, int y, int w, int h, uint32_t co
     return obj;
 }
 
+void ui_pixel_hud_decor(lv_obj_t *parent)
+{
+    (void)parent;
+}
+
 lv_obj_t *ui_pixel_label(lv_obj_t *parent, const char *text,
                          const lv_font_t *font, uint32_t color)
 {
@@ -263,12 +513,17 @@ lv_obj_t *ui_pixel_label(lv_obj_t *parent, const char *text,
     return label;
 }
 
-static void add_cloud(lv_obj_t *parent, int x, int y)
+void ui_pixel_card_style(lv_obj_t *obj, uint32_t bg, uint32_t border)
 {
-    block(parent, x + 1, y + 7, 43, 10, UI_INK);
-    block(parent, x + 5, y + 4, 35, 10, 0xFFFFFF);
-    block(parent, x + 12, y, 10, 9, 0xFFFFFF);
-    block(parent, x + 27, y + 1, 9, 8, 0xFFFFFF);
+    if (!obj) return;
+    lv_obj_set_style_radius(obj, UI_RADIUS, 0);
+    lv_obj_set_style_clip_corner(obj, false, 0);
+    lv_obj_set_style_border_width(obj, border ? 1 : 0, 0);
+    lv_obj_set_style_border_color(obj, lv_color_hex(border ? border : UI_LINE), 0);
+    lv_obj_set_style_border_opa(obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_outline_width(obj, 0, 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(bg), 0);
 }
 
 lv_obj_t *ui_pixel_screen_create(const char *title)
@@ -277,34 +532,21 @@ lv_obj_t *ui_pixel_screen_create(const char *title)
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     ui_pixel_strip_theme(scr);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(scr, lv_color_hex(UI_SKY), 0);
+    lv_obj_set_style_bg_color(scr, lv_color_hex(UI_BG), 0);
     lv_obj_set_style_text_font(scr, ui_pixel_font_14(), 0);
+    ui_pixel_hud_decor(scr);
 
-    add_cloud(scr, 188, 8);
-    block(scr, 0, 286, 240, 34, UI_GRASS);
-    block(scr, 0, 286, 240, 4, 0xA7D93E);
-    for (int x = 0; x < 240; x += 30) {
-        block(scr, x, 312, 18, 8, UI_GRASS_DARK);
-        block(scr, x + 18, 316, 12, 4, 0x75452E);
-    }
-
-    block(scr, 9, 12, 151, 33, UI_INK);
-    lv_obj_t *plate = block(scr, 5, 8, 151, 33, UI_PAPER);
-    lv_obj_set_style_border_color(plate, lv_color_hex(UI_INK), 0);
-    lv_obj_set_style_border_width(plate, 3, 0);
-    lv_obj_t *heading = ui_pixel_label(plate, title, ui_pixel_font_20(), UI_INK);
-    lv_obj_center(heading);
+    lv_obj_t *heading = ui_pixel_label(scr, title, ui_pixel_font_20(), UI_TEXT);
+    lv_obj_align(heading, LV_ALIGN_TOP_LEFT, 16, 12);
     return scr;
 }
 
 lv_obj_t *ui_pixel_panel_create(lv_obj_t *parent, int x, int y, int w, int h,
                                 uint32_t color)
 {
-    block(parent, x + 5, y + 6, w, h, UI_INK);
     lv_obj_t *panel = block(parent, x, y, w, h, color);
-    lv_obj_set_style_border_color(panel, lv_color_hex(UI_INK), 0);
-    lv_obj_set_style_border_width(panel, 4, 0);
-    lv_obj_set_style_pad_all(panel, 7, 0);
+    ui_pixel_card_style(panel, color, 0);
+    lv_obj_set_style_pad_all(panel, 10, 0);
     return panel;
 }
 
@@ -314,7 +556,8 @@ lv_obj_t *ui_pixel_mascot_create(lv_obj_t *parent, int x, int y)
     ui_pixel_strip_theme(m);
     lv_obj_set_pos(m, x, y);
     lv_obj_set_size(m, 38, 48);
-    lv_obj_set_style_bg_opa(m, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(m, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(m, lv_color_hex(UI_BG), 0);
 
     /* 原创“小电视机器人”：天线、发光屏幕脸、橙色围巾与履带脚。 */
     block(m, 18, 0, 3, 6, UI_INK);
@@ -323,8 +566,8 @@ lv_obj_t *ui_pixel_mascot_create(lv_obj_t *parent, int x, int y)
     block(m, 0, 12, 5, 10, 0x7557D9);
     block(m, 33, 12, 5, 10, 0x7557D9);
     block(m, 7, 10, 24, 16, 0xB9F3FF);
-    lv_obj_t *left_eye = block(m, 11, 14, 4, 6, 0x294B7A);
-    lv_obj_t *right_eye = block(m, 23, 14, 4, 6, 0x294B7A);
+    block(m, 11, 14, 4, 6, 0x294B7A);
+    block(m, 23, 14, 4, 6, 0x294B7A);
     block(m, 16, 22, 7, 2, 0x7557D9);
     block(m, 10, 29, 18, 4, UI_ORANGE);
     block(m, 8, 33, 22, 11, 0x7557D9);
@@ -332,34 +575,12 @@ lv_obj_t *ui_pixel_mascot_create(lv_obj_t *parent, int x, int y)
     block(m, 30, 35, 5, 7, 0xB9F3FF);
     block(m, 8, 44, 9, 4, UI_INK);
     block(m, 21, 44, 9, 4, UI_INK);
-    start_blink(left_eye);
-    start_blink(right_eye);
     return m;
 }
 
 static void jump_y(void *obj, int32_t value)
 {
     lv_obj_set_y((lv_obj_t *)obj, value);
-}
-
-static void blink_eye(void *obj, int32_t value)
-{
-    lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)value, 0);
-}
-
-static void start_blink(lv_obj_t *eye)
-{
-    lv_anim_t anim;
-    lv_anim_init(&anim);
-    lv_anim_set_var(&anim, eye);
-    lv_anim_set_exec_cb(&anim, blink_eye);
-    lv_anim_set_values(&anim, LV_OPA_COVER, LV_OPA_20);
-    lv_anim_set_duration(&anim, 70);
-    lv_anim_set_playback_duration(&anim, 70);
-    lv_anim_set_repeat_delay(&anim, 1700);
-    lv_anim_set_repeat_count(&anim, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_path_cb(&anim, lv_anim_path_step);
-    lv_anim_start(&anim);
 }
 
 void ui_pixel_mascot_jump(lv_obj_t *mascot)
@@ -380,8 +601,22 @@ void ui_pixel_mascot_jump(lv_obj_t *mascot)
 
 void ui_pixel_set_selected(lv_obj_t *panel, bool selected, bool enabled)
 {
-    uint32_t color = !enabled ? 0x78909C : (selected ? UI_YELLOW : UI_PAPER);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(color), 0);
-    lv_obj_set_style_border_color(panel,
-        lv_color_hex(selected ? 0xFFFFFF : UI_INK), 0);
+    ui_pixel_select(panel, selected && enabled, UI_CYAN);
+    if (!enabled) {
+        lv_obj_set_style_bg_color(panel, lv_color_hex(UI_GRID), 0);
+        lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    }
+}
+
+void ui_pixel_select(lv_obj_t *panel, bool selected, uint32_t accent)
+{
+    if (!panel) return;
+    (void)accent;
+    lv_color_t want = lv_color_hex(selected ? UI_FILL : UI_CARD);
+    if (lv_color_eq(lv_obj_get_style_bg_color(panel, 0), want)) return;
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(panel, 0, 0);
+    lv_obj_set_style_outline_width(panel, 0, 0);
+    lv_obj_set_style_radius(panel, UI_RADIUS, 0);
+    lv_obj_set_style_bg_color(panel, want, 0);
 }

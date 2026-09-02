@@ -1,7 +1,10 @@
 #include "app_ota.h"
 
 #include "app_ota_logic.h"
+#include "app_net.h"
+#include "app_web.h"
 #include "bsp_battery.h"
+#include "bsp_ble.h"
 #include "bsp_wifi.h"
 
 #include "esp_app_desc.h"
@@ -46,6 +49,7 @@ static volatile bool s_cancel;
 static bool s_checked;
 static TaskHandle_t s_task;
 static volatile int s_job;
+static bool s_ble_suspended;
 
 static void load_skip(void)
 {
@@ -63,9 +67,10 @@ static void save_skip(void)
     nvs_handle_t h;
 
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_str(h, NVS_SKIP, s_skip);
-    nvs_commit(h);
+    esp_err_t e = nvs_set_str(h, NVS_SKIP, s_skip);
+    if (e == ESP_OK) e = nvs_commit(h);
     nvs_close(h);
+    if (e != ESP_OK) ESP_LOGE(TAG, "save skip: %s", esp_err_to_name(e));
 }
 
 static void set_fail(app_ota_err_t e)
@@ -336,6 +341,7 @@ static int apply_one(const char *url, const esp_partition_t *part)
         else if (s_man.size) s_prog = got * 100 / (int)s_man.size;
         else s_prog = 0;
         if (s_prog > 99) s_prog = 99;
+        vTaskDelay(1);
     }
 
     if (s_man.size && (uint32_t)got != s_man.size) {
@@ -439,24 +445,58 @@ static void do_apply(void)
 static void ota_task(void *arg)
 {
     (void)arg;
-    for (;;) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        int job = s_job;
-        s_job = 0;
+    int job = s_job;
+    s_job = 0;
+    if (app_net_acquire(APP_NET_OTA, 30000)) {
         if (job == 1) do_check();
         else if (job == 2) do_apply();
+        app_net_release(APP_NET_OTA);
+    } else {
+        set_fail(APP_OTA_E_NET);
     }
+    ESP_LOGI(TAG, "task done stack=%u",
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+    if (s_ble_suspended) {
+        s_ble_suspended = false;
+        vTaskDelay(pdMS_TO_TICKS(200));
+        bsp_ble_resume();
+    }
+    app_web_suspend_for_ota(false);
+    s_task = NULL;
+    vTaskDelete(NULL);
 }
 
 static void kick(int job)
 {
-    if (!s_task) xTaskCreate(ota_task, "ota", 12288, NULL, 4, &s_task);
+    if (s_task) return;
+    app_web_suspend_for_ota(true);
+    bool drop_ble = (job == 2) || (bsp_ble_conn_count() == 0);
+    if (drop_ble && bsp_ble_stack_up()) {
+        if (bsp_ble_suspend() != ESP_OK) {
+            app_web_suspend_for_ota(false);
+            set_fail(APP_OTA_E_NET);
+            return;
+        }
+        s_ble_suspended = true;
+    }
+    s_job = job;
+    s_st = (job == 2) ? APP_OTA_APPLYING : APP_OTA_CHECKING;
+    s_err = APP_OTA_E_NONE;
+    if (!app_net_heap_ready(18 * 1024) ||
+        xTaskCreate(ota_task, "ota", 12288, NULL, 4, &s_task) != pdPASS) {
+        s_task = NULL;
+    }
     if (!s_task) {
+        s_job = 0;
+        s_st = APP_OTA_IDLE;
+        if (s_ble_suspended) {
+            s_ble_suspended = false;
+            bsp_ble_resume();
+        }
+        app_web_suspend_for_ota(false);
         set_fail(APP_OTA_E_NET);
         return;
     }
-    s_job = job;
-    xTaskNotifyGive(s_task);
 }
 
 void app_ota_init(void)
@@ -476,9 +516,11 @@ void app_ota_init(void)
 
 void app_ota_tick(bool allow_auto)
 {
-    if (s_st == APP_OTA_CHECKING || s_st == APP_OTA_APPLYING) return;
+    if (s_task || s_st == APP_OTA_CHECKING || s_st == APP_OTA_APPLYING) return;
     if (s_checked || !allow_auto) return;
     if (!wifi_ok()) return;
+    if (bsp_wifi_ap_active() || app_web_qr_visible()) return;
+    if (bsp_ble_conn_count() > 0) return;
     s_checked = true;
     kick(1);
 }
@@ -515,7 +557,7 @@ int app_ota_progress(void)
 
 bool app_ota_busy(void)
 {
-    return s_st == APP_OTA_CHECKING || s_st == APP_OTA_APPLYING;
+    return s_task != NULL || s_st == APP_OTA_CHECKING || s_st == APP_OTA_APPLYING;
 }
 
 bool app_ota_prompt(void)

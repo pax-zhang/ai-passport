@@ -1,5 +1,6 @@
 #include "app_meow_ui.h"
 
+#include "app.h"
 #include "app_i18n.h"
 #include "app_ota.h"
 #include "app_prefs.h"
@@ -32,8 +33,8 @@
 #include <string.h>
 #include <time.h>
 
-#define LCD_W  240
-#define LCD_H  320
+#define LCD_W  APP_VIEW_W
+#define LCD_H  APP_VIEW_H
 #define NAV_H  44
 #define PAGE_H (LCD_H - NAV_H)
 
@@ -3482,6 +3483,11 @@ static void on_tick(lv_timer_t *t)
     bool flash_tick;
 
     (void)t;
+    if (app_meow_set_open_now()) {
+        app_time_tick();
+        tune_pm();
+        return;
+    }
     if (!s_ready) {
         load_nvs();
         s_ready = true;
@@ -3521,7 +3527,7 @@ static void on_tick(lv_timer_t *t)
                      !app_meow_set_open_now();
         app_ota_tick(allow);
     }
-    if (!s_asleep) {
+    if (!s_asleep && !app_meow_set_open_now()) {
         s_awake_ms += dt;
         if (ui_live() || flash_tick) {
             paint();
@@ -3567,7 +3573,7 @@ void app_meow_start(void)
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_text_font(s_scr, ui_pixel_font_14(), 0);
 
-    s_lcd = px(s_scr, 0, 0, LCD_W, LCD_H, COL_BG);
+    s_lcd = px(s_scr, APP_VIEW_X, APP_VIEW_Y, LCD_W, LCD_H, COL_BG);
     lv_obj_set_style_radius(s_lcd, 0, 0);
     lv_obj_set_style_border_width(s_lcd, 0, 0);
 

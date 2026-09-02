@@ -1,16 +1,29 @@
 #pragma once
 
+#include "app_notif_store.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #define APP_KW_MAX      8
-#define APP_KW_LEN      24
+#define APP_KW_LEN      80
+#define APP_KW_NAME_LEN 16
+#define APP_NOTIF_FIELD_MAX 192
 #define APP_NOTIF_Q     6
-#define APP_PRIO_NORMAL 0
-#define APP_PRIO_HIGH   1
+#define APP_CAT_INCOMING 1
+#define APP_NOTIF_FLAG_POS (1u << 3)
+#define APP_NOTIF_FLAG_NEG (1u << 4)
+#define APP_NOTIF_ACT_POS   0
+#define APP_NOTIF_ACT_NEG   1
+#define APP_NOTIF_ACT_CLOSE 2
+#define APP_NOTIF_ACT_MAX   3
+#define APP_NOTIF_ACT_LABEL 24
 
+// prio 存 app_alert_t 三档:0 静默 / 1 弹窗 / 2 强提醒。
+// 字段名沿用 prio,NVS blob 布局不变。
 typedef struct {
+    char name[APP_KW_NAME_LEN + 1];
     char text[APP_KW_LEN + 1];
     uint8_t prio;
 } app_kw_t;
@@ -21,8 +34,19 @@ typedef struct {
     char message[128 + 1];
     char app_name[32 + 1];
     char date[15 + 1];
-    uint8_t prio;
+    char pos_label[APP_NOTIF_ACT_LABEL + 1];
+    char neg_label[APP_NOTIF_ACT_LABEL + 1];
+    uint32_t uid;
+    uint16_t conn;
+    uint8_t flags;
+    uint8_t category;
+    uint8_t alert;
 } app_notif_item_t;
+
+typedef struct {
+    uint8_t kind;
+    char label[APP_NOTIF_ACT_LABEL + 1];
+} app_notif_act_t;
 
 // month 1-12. Minutes keep a leading zero; month/day/hour do not.
 void app_time_format(int month, int day, int hour, int minute,
@@ -34,8 +58,8 @@ bool app_ancs_date_text(const char *iso, char *out, size_t n);
 // Subtitle only when present and not a duplicate of title.
 bool app_notif_show_subtitle(const char *title, const char *subtitle);
 
-// -1 = no match. If kw_n==0 every text matches as NORMAL.
-int app_kw_match(const char *text, const app_kw_t *kws, int kw_n);
+// hour 0..23; start==end disables the window.
+bool app_dnd_in_range(int hour, int start, int end);
 
 typedef struct {
     app_notif_item_t items[APP_NOTIF_Q];
@@ -45,13 +69,20 @@ typedef struct {
 
 void app_notif_q_init(app_notif_q_t *q);
 bool app_notif_q_push(app_notif_q_t *q, const app_notif_item_t *it);
+// 同 uid 已在队列里则原地更新并返回 true(ANCS MODIFIED),否则返回 false。
+bool app_notif_q_update(app_notif_q_t *q, const app_notif_item_t *it);
 const app_notif_item_t *app_notif_q_front(const app_notif_q_t *q);
+const app_notif_item_t *app_notif_q_at(const app_notif_q_t *q, int i);
 void app_notif_q_pop(app_notif_q_t *q);
 int app_notif_q_count(const app_notif_q_t *q);
+void app_notif_q_drop_uid(app_notif_q_t *q, uint32_t uid);
+int app_notif_acts(const app_notif_item_t *it, app_notif_act_t *out, int max);
+int app_notif_act_default(const app_notif_act_t *acts, int n, uint8_t category);
 
 #define APP_TOTP_ISSUER_LEN 24
 #define APP_TOTP_LABEL_LEN  32
 #define APP_TOTP_SECRET_LEN 64
+#define APP_TOTP_WEB_MAX    32
 
 typedef struct {
     char issuer[APP_TOTP_ISSUER_LEN + 1];
@@ -95,52 +126,6 @@ int app_totp_list_find(const app_totp_list_t *l, const app_totp_acct_t *a);
 const char *app_totp_issuer(const app_totp_acct_t *a);
 const char *app_totp_label(const app_totp_acct_t *a);
 bool app_totp_same_group(const app_totp_acct_t *a, const app_totp_acct_t *b);
-
-#define APP_LOG_N        16
-#define APP_LOG_APP_ID   40
-#define APP_LOG_APP_NAME 32
-#define APP_LOG_TITLE    40
-#define APP_LOG_SUB      32
-#define APP_LOG_MSG      80
-#define APP_LOG_DATE     15
-#define APP_CAT_N        12
-
-typedef struct {
-    char app_id[APP_LOG_APP_ID + 1];
-    char app_name[APP_LOG_APP_NAME + 1];
-    char title[APP_LOG_TITLE + 1];
-    char subtitle[APP_LOG_SUB + 1];
-    char message[APP_LOG_MSG + 1];
-    char date[APP_LOG_DATE + 1];
-    uint8_t category;
-} app_log_item_t;
-
-typedef struct {
-    app_log_item_t items[APP_LOG_N];
-    int head;
-    int count;
-} app_log_t;
-
-typedef struct {
-    char app_id[APP_LOG_APP_ID + 1];
-    char app_name[APP_LOG_APP_NAME + 1];
-    uint8_t category;
-    int count;
-} app_log_group_t;
-
-void app_log_init(app_log_t *log);
-bool app_log_push(app_log_t *log, const app_log_item_t *src);
-void app_log_clear(app_log_t *log);
-int app_log_count(const app_log_t *log);
-// newest_i 0 = most recent
-const app_log_item_t *app_log_at(const app_log_t *log, int newest_i);
-bool app_log_remove(app_log_t *log, int newest_i);
-const char *app_log_app_key(const app_log_item_t *it);
-void app_log_app_label(const app_log_item_t *it, char *out, size_t n);
-int app_log_apps(const app_log_t *log, app_log_group_t *out, int max);
-int app_log_cats(const app_log_t *log, app_log_group_t *out, int max);
-int app_log_match_app(const app_log_t *log, const char *app_id, int *idx, int max);
-int app_log_match_cat(const app_log_t *log, uint8_t category, int *idx, int max);
 
 // 系统调试日志环形缓冲。无 PSRAM,行宽按 200px/14px 字体截断后折行。
 #define APP_DLOG_N 48

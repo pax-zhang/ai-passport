@@ -1,8 +1,8 @@
 // components/bsp/include/bsp_wifi.h
 // ESP32-C3 2.4 GHz STA:扫描、连接、NVS 记忆、开机自动重连。
 //
-// 线程:bsp_wifi_scan() 会阻塞最多约 10 秒,必须在工作任务中调用,
-// 禁止放进按键回调或 LVGL 任务。bsp_wifi_connect() 只启动连接,本身很快。
+// 线程:bsp_wifi_scan() / bsp_wifi_connect() 会阻塞,必须在工作任务中调用,
+// 禁止放进按键回调或 LVGL 任务。
 #pragma once
 
 #include "esp_err.h"
@@ -42,6 +42,7 @@ esp_err_t bsp_wifi_ip(char *buf, size_t n);
 // 阻塞扫描。返回 AP 数量(0..max);失败返回负数。
 // 同一 SSID 只保留 RSSI 最强的一条,结果按信号从强到弱排序。
 int bsp_wifi_scan(bsp_wifi_ap_t *out, int max);
+void bsp_wifi_scan_cancel(void);
 
 // 启动连接。password 在开放网络上可传 ""。成功拿到 IP 后才写入 NVS。
 esp_err_t bsp_wifi_connect(const char *ssid, const char *password);
@@ -70,6 +71,15 @@ esp_err_t bsp_wifi_set_power_save(bool on);
 void bsp_wifi_ps_hold(void);
 void bsp_wifi_ps_release(void);
 
-// 息屏时停射频,不改 NVS 开关。只在按键唤醒后 resume,ANCS 亮屏不重连。
+// 息屏时停射频,不改 NVS 开关。联网功能自行 resume。不要为了 BLE 停 Wi-Fi。
+// 热点开启时 suspend 为空操作,避免手机掉线。
 esp_err_t bsp_wifi_radio_suspend(void);
 esp_err_t bsp_wifi_radio_resume(void);
+
+#define BSP_WIFI_AP_SSID_MAX 32
+
+esp_err_t bsp_wifi_ap_start(void);
+esp_err_t bsp_wifi_ap_stop(void);
+bool bsp_wifi_ap_active(void);
+const char *bsp_wifi_ap_ssid(void);
+esp_err_t bsp_wifi_ap_ip(char *buf, size_t n);

@@ -27,8 +27,8 @@ int main(void)
     assert(!app_ota_is_newer("0.1.0", "0.1.0"));
     assert(!app_ota_is_newer("bad", "0.1.0"));
 
-    assert(strstr(APP_OTA_MANIFEST_URL, "/demo/meow/ota/demo/meow/latest.json"));
-    assert(strstr(APP_OTA_MANIFEST_URL_ALT, "@demo/meow/ota/demo/meow/latest.json"));
+    assert(strstr(APP_OTA_MANIFEST_URL, "/demo/iphone/ota/demo/iphone/latest.json"));
+    assert(strstr(APP_OTA_MANIFEST_URL_ALT, "@demo/iphone/ota/demo/iphone/latest.json"));
 
     assert(app_ota_url_ok("https://example.com/a.bin"));
     assert(app_ota_url_ok(
@@ -56,13 +56,13 @@ int main(void)
 
     assert(app_ota_parse_manifest(
         "{\n"
-        "  \"channel\": \"demo/meow\",\n"
+        "  \"channel\": \"demo/iphone\",\n"
         "  \"version\": \"0.2.0\",\n"
         "  \"url\": \"https://github.com/pax-zhang/ai-passport/releases/download/demo-meow-v0.2.0/a.bin\",\n"
         "  \"sha256\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n"
         "  \"size\": 1800000\n"
         "}", &m));
-    assert(strcmp(m.channel, "demo/meow") == 0);
+    assert(strcmp(m.channel, "demo/iphone") == 0);
     assert(strcmp(m.version, "0.2.0") == 0);
     assert(m.size == 1800000);
     assert(app_ota_is_newer("0.1.0", m.version));
@@ -84,7 +84,7 @@ int main(void)
         &m));
     assert(!app_ota_parse_manifest(
         "{\n"
-        "  \"channel\": \"demo/meow\",\n"
+        "  \"channel\": \"demo/iphone\",\n"
         "  \"version\": \"0.2.0\",\n"
         "  \"url\": \"https://example.com/FoloToy-AI-Passport-demo-meow-factory.bin\",\n"
         "  \"sha256\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n"
@@ -92,7 +92,7 @@ int main(void)
         "}", &m));
     assert(app_ota_parse_manifest(
         "{\n"
-        "  \"channel\": \"demo/meow\",\n"
+        "  \"channel\": \"demo/iphone\",\n"
         "  \"version\": \"0.2.0\",\n"
         "  \"url\": \"https://example.com/FoloToy-AI-Passport-demo-meow-factory.bin\",\n"
         "  \"ota_url\": \"https://example.com/FoloToy-AI-Passport-demo-meow.bin\",\n"

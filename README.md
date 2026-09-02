@@ -1,10 +1,8 @@
-# FoloToy AI Passport — Meow
+# FoloToy AI Passport — iPhone Companion
 
 English | [简体中文](README.zh_CN.md)
 
-**This `demo/meow` branch is a standalone pet game, not the Home-app firmware on `main`.** It boots into Meow only. Alerts, Walkie, Weather, and TOTP are not in this image. Language, Wi-Fi, Bluetooth, clock, screen, and sound are set **inside the game**. Wi-Fi and Bluetooth are for **Visit** and **Battle** under World (nearby BLE, or the same saved LAN). NTP from STA is used for the pet’s bedtime.
-
-Game controls: [English](docs/APPS.md) · [简体中文](docs/APPS.zh_CN.md)
+**This `demo/iphone` branch is an iPhone companion firmware, not the demo menu on `main`.** It boots into a Home screen with Alerts, Weather, Codes, Remote, and Settings tiles. Alerts consumes ANCS from a paired iPhone; Remote is a BLE HID shutter and media controller. Walkie is not in this image.
 
 FoloToy AI Passport is open wearable AI hardware designed for AI agents. This repository is the development baseline for the device. It goes beyond showing “what the board can run” by keeping the **hardware facts, stable interfaces, resource boundaries, reference implementations, and validation methods** that an agent needs to build applications in one place.
 
@@ -144,7 +142,10 @@ Only hardware capabilities shared by multiple applications belong in `components
 - LVGL is not thread-safe. Code outside the LVGL context must hold `bsp_lvgl_lock()` while accessing `lv_*` objects.
 - Button callbacks only dispatch lightweight events. Recording, playback, storage, and other slow operations belong in worker tasks.
 - When leaving a page, stop every task or timer that may access its UI before deleting the screen and clearing object pointers.
-- The default global interaction is `UP`/`DOWN` navigation in the menu, short `OK` to enter, and long `OK` to return from a page. Any change must be explicit.
+- The interaction convention is fixed and applies to every page: short `UP`/`DOWN` moves focus and skips group headers, read-only rows, and disabled rows; long `UP`/`DOWN` scrolls continuously or performs a page-specific action; short `OK` confirms or enters; long `OK` returns one level, and locks the screen on Home. Any change must be explicit.
+- Lists never contain a `Back` row. Entering a page focuses the first actionable row, and returning restores the previous focus. Focus lives in `app_list_t` on the page stack (`app_shell_list()`), so a page must not keep its own `static int s_sel`.
+- List pages build an `app_row_t` array and render through `app_ui_list_bind()` / `app_ui_list_render()` instead of hand-rolling `"> "` prefixes and window arithmetic.
+- Fullscreen or half-screen overlays register an `app_modal_t` with `app_shell_register_modal()` and intercept keys by priority. The shell must not learn about individual overlays.
 - New images, fonts, network stacks, audio buffers, LVGL buffers, and task stacks must be evaluated against internal RAM. Sufficient total free heap does not guarantee a sufficiently large contiguous block.
 - Testable state machines, protocols, timing, and layout calculations should be separated from ESP-IDF/LVGL and covered by host-side logic tests.
 
@@ -181,7 +182,33 @@ cc -std=c11 -Wall -Wextra -Werror -Imain \
 /tmp/test_app_i18n
 
 cc -std=c11 -Wall -Wextra -Werror -Imain \
-  tests/test_app_meow.c main/app_meow_logic.c \
+  tests/test_app_logic.c main/app_logic.c main/app_notif_rule.c \
+  main/app_notif_store.c \
+  -o /tmp/test_app_logic
+/tmp/test_app_logic
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_list.c main/app_list.c \
+  -o /tmp/test_app_list
+/tmp/test_app_list
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_notif_store.c main/app_notif_store.c \
+  -o /tmp/test_app_notif_store
+/tmp/test_app_notif_store
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_wifi_flow.c main/app_wifi_flow.c \
+  -o /tmp/test_app_wifi_flow
+/tmp/test_app_wifi_flow
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_net_policy.c main/app_net_policy.c \
+  -o /tmp/test_app_net_policy
+/tmp/test_app_net_policy
+
+cc -std=c11 -Wall -Wextra -Werror -Imain \
+  tests/test_app_meow.c main/app_meow_logic.c main/app_logic.c \
   -o /tmp/test_app_meow
 /tmp/test_app_meow
 
@@ -214,12 +241,15 @@ Different example branches may provide their own host-test commands; follow the 
 
 - USB Serial/JTAG produces stable startup logs with no reboot loop, assertion, or watchdog reset.
 - Display orientation, colors, edges, refresh behavior, and backlight are correct.
-- `UP`, `DOWN`, and `OK` produce the intended events, and long `OK` returns correctly.
+- `UP`, `DOWN`, and `OK` produce the intended events on every page: focus never stops on a header or a disabled row, long `OK` returns one level at a time and restores the previous focus, and long `OK` on Home locks the screen.
 - Audio sample rate, playback, non-zero recording, and page exit behavior are correct.
 - Battery readings are plausible, and the application degrades safely when the CW2017 is absent.
 - Wi-Fi page can scan, join a network, survive reboot with saved credentials, and forget the network.
 - BLE page can advertise, pair with an iPhone and one additional host (Mac or another Passport, 2 links at a time), receive ANCS notifications, and show keyword-matched SMS (or the extracted code).
-- Walkie page can start WebRTC/Wi-Fi or Bluetooth mode, hold UP to talk, and stop with OK; two devices on the same channel hear each other. Phones on the same LAN can open `http://<ip>:8080/` from the QR page (plain HTTP; do not use port 80). Mic pages `/w` and `/rtc` redirect to `https://<ip>:8443/` (accept the self-signed cert). Do not use WeChat's in-app browser — open in Safari or Chrome. Passport is signaling only.
+- Notification tiers behave as configured: `Silent` only increments the unread badge without a popup or a tone, `Popup` closes itself after the configured auto-hide delay, and `Urgent` stays on screen and still sounds during Do Not Disturb.
+- Dismissing a notification on the iPhone removes it from both the popup and the Alerts list (ANCS `REMOVED`), and editing one updates the existing row in place instead of adding a duplicate (`MODIFIED`).
+- Five or more notifications arriving back to back all reach the list, which validates the BSP ring queue.
+- Notification history and the unread count survive a reboot.
 - Repeated page transitions and concurrent operations do not continuously leak tasks, objects, or heap.
 
 An agent's final delivery must distinguish these outcomes:
@@ -238,10 +268,11 @@ See the [AI Hardware Development Guide](docs/AI_HARDWARE_DEVELOPMENT_GUIDE.md) f
 ```text
 components/bsp/include/  Public BSP APIs and bsp_pins.h hardware facts
 components/bsp/src/      Display, button, audio, battery, Wi-Fi, BLE, and shared-I2C implementations
-main/                    Minimal menu, LVGL UI, and independent hardware demo pages
+main/                    Home shell, LVGL UI, list component, and app pages
+main/app_list.c          Row model and focus/window controller shared by every list page
+main/app_notif_store.c   Notification history with uid dedupe, unread state, and NVS blob
 tests/                   Lightweight logic tests that can run without hardware
-docs/                    Agent hardware guide, on-device app/settings notes, and extension docs
-docs/APPS.md             Home apps, Settings pages, and NVS keys
+docs/                    Agent hardware guide and extension docs
 sdkconfig.defaults       ESP32-C3, USB console, Flash, LVGL, Wi-Fi STA, NimBLE defaults
 partitions.csv           8 MB Flash layout with two ~3.9 MB OTA slots
 AGENTS.md                Coding, validation, and contribution rules for agents

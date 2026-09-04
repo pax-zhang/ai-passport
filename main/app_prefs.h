@@ -1,58 +1,136 @@
 #pragma once
 
-#include "app_logic.h"
 #include <stdint.h>
 
-#define APP_TONE_OFF    0
-#define APP_TONE_BEEP   1
-#define APP_TONE_DOUBLE 2
-#define APP_TONE_CHIME  3
-#define APP_TONE_TRIPLE 4
-#define APP_TONE_ALARM  5
-#define APP_TONE_MEOW   6
+#define APP_FACE_N      19
+#define APP_FACE_CUSTOM 18
+#define APP_FACE_OLD    10
+#define APP_FACE_PREV   14
+#define APP_COMP_MAX    8
 
-#define APP_NTP_SERVER_N 4
+#define APP_COMP_NONE   0
+#define APP_COMP_TIME   1
+#define APP_COMP_DATE   2
+#define APP_COMP_WORLD  3
+#define APP_COMP_ANALOG 4
+#define APP_COMP_NEON   5
+#define APP_COMP_XL     6
+
+#define APP_ST_PILL     0x0001u
+#define APP_ST_NUMS     0x0002u
+#define APP_ST_GMT      0x0004u
+#define APP_ST_HIDE     0x0008u
+#define APP_ST_NO_SEC   0x0010u
+#define APP_ST_NO_MIN   0x0020u
+#define APP_ST_NO_HOUR  0x0040u
+#define APP_ST_NO_TICK  0x0080u
+#define APP_ST_NO_RING  0x0100u
+#define APP_ST_NO_CAP   0x0200u
+#define APP_ST_ABBR     0x0400u
+#define APP_ST_WRAP     0x0800u
+#define APP_ST_HMS      0x1000u
+#define APP_ST_DFMT_SHIFT 14
+#define APP_ST_DFMT_MASK  0xC000u
+
+#define APP_ANA_CLASSIC 0
+#define APP_ANA_CAL     1
+#define APP_ANA_INK     2
+#define APP_ANA_GMT     3
+#define APP_ANA_HERMES  4
+#define APP_ANA_XMAS    5
+#define APP_ANA_ASTRO   6
+#define APP_ANA_COLOR   7
+#define APP_ANA_MAX     7
+
+#define APP_DFMT_FULL  0
+#define APP_DFMT_WD    1
+#define APP_DFMT_ISO   2
+#define APP_DFMT_SOL   3
+
+#define APP_FONT_AUTO  0
+#define APP_FONT_CJK   1
+#define APP_FONT_LAT14 2
+#define APP_FONT_LAT20 3
+
+#define APP_CITY_MAX 4
+#define APP_CITY_OFF 255
+#define APP_ELEM_N   3
+#define APP_TZ_NAME  40
+
+#define APP_ELEM_TIME  0
+#define APP_ELEM_DATE  1
+#define APP_ELEM_WORLD 2
+
+#define APP_FACE_CLASSIC    0
+#define APP_FACE_NEON       1
+#define APP_FACE_WORLD      2
+#define APP_FACE_INK        3
+#define APP_FACE_SPLIT      4
+#define APP_FACE_MODULAR    5
+#define APP_FACE_CALIFORNIA 6
+#define APP_FACE_XLARGE     7
+#define APP_FACE_INFOGRAPH  8
+#define APP_FACE_GMT        9
+#define APP_FACE_HERMES     10
+#define APP_FACE_TERM       11
+#define APP_FACE_XMAS       12
+#define APP_FACE_ASTRO      13
+#define APP_FACE_NUMERAL    14
+#define APP_FACE_ROUND      15
+#define APP_FACE_TUBE       16
+#define APP_FACE_BANDS      17
 
 typedef struct {
-    uint8_t brightness;   // 10..100, step 10
-    uint16_t sleep_sec;   // 0 = never
-    uint8_t lock_on;      // 1 = show lock after sleep/idle
-    uint8_t lock_stay;    // 1 = keep backlight on while locked
-    uint8_t lock_time;    // 1 = show clock on lock screen
-    uint8_t lock_wx;      // 1 = show weather on lock screen
-    uint8_t lock_quote;   // 1 = show verse on lock screen
-    uint8_t volume;       // 0..100, step 10
-    uint8_t muted;        // 1 = silence all output
-    uint8_t tone_msg;
-    uint8_t tone_alert;
-    uint8_t ntp_on;
-    uint8_t ntp_server;   // index into app_ntp_server()
-    uint8_t auto_hide;    // 0, 5, 10, 20
-    uint8_t lang;         // app_lang_t
-    char wx_city[32 + 1];
-    int32_t wx_lat_e4;    // latitude * 10000
-    int32_t wx_lon_e4;    // longitude * 10000
-    uint16_t wx_interval; // minutes: 15/30/60/180
-    uint8_t wx_imperial;  // 0 = C/kmh, 1 = F/mph
-    uint8_t meow_bed;     // 0..23 DND start, default 21
-    uint8_t meow_wake;    // 0..23 DND end, default 8; equal to bed = off
-    uint8_t ota_auto;     // 1 = check for updates in background
-    uint8_t theme;
-    uint8_t notif_def;    // 未命中规则时的档位,含 APP_ALERT_DROP
-    uint8_t kw_ver;       // 规则语义版本,见 APP_RULE_VER
-    uint8_t kw_n;
-    app_kw_t kw[APP_KW_MAX];
+    uint8_t type;
+    uint8_t city;
+    uint8_t scale;
+    uint8_t font;
+    uint8_t weight;
+    uint8_t shadow;
+    uint8_t bg_opa;
+    uint8_t radius;
+    uint16_t style;
+    int16_t x;
+    int16_t y;
+    uint32_t fg;
+    uint32_t acc;
+} app_comp_t;
+
+typedef struct {
+    uint8_t n;
+    uint8_t has_bg;
+    uint8_t pad[2];
+    uint32_t canvas;
+    app_comp_t comp[APP_COMP_MAX];
+} app_custom_t;
+
+typedef struct {
+    int16_t x;
+    int16_t y;
+    uint8_t scale;
+} app_elem_t;
+
+typedef struct {
+    uint8_t city[APP_CITY_MAX];
+    app_elem_t elem[APP_ELEM_N];
+} app_face_t;
+
+typedef struct {
+    uint8_t brightness;
+    uint16_t sleep_sec;
+    uint8_t face;
+    int16_t tz_off;
+    char tz_name[APP_TZ_NAME];
+    app_face_t faces[APP_FACE_CUSTOM];
+    app_custom_t custom;
 } app_prefs_t;
 
 void app_prefs_load(void);
 void app_prefs_save(void);
 void app_prefs_flush(void);
 void app_prefs_tick(void);
-void app_prefs_save_lang(void);
 app_prefs_t *app_prefs(void);
-app_totp_list_t *app_totp_store(void);
-bool app_totp_persist(void);
-
-const char *app_ntp_server(int index);
 void app_prefs_apply_display(void);
-void app_prefs_apply_audio(void);
+void app_prefs_face_defaults(app_face_t *f, int style);
+void app_prefs_custom_defaults(app_custom_t *c);
+app_custom_t *app_prefs_custom(void);

@@ -6,8 +6,7 @@ idf_component_register(
          "src/bsp_audio.c"
          "src/bsp_battery.c"
          "src/bsp_wifi.c"
-         "src/bsp_ble.c"
          "src/bsp_pm.c"
     INCLUDE_DIRS "include"
-    REQUIRES driver esp_driver_i2c esp_driver_i2s esp_lcd esp_lvgl_port button esp_adc esp_codec_dev esp_wifi nvs_flash esp_netif esp_event bt esp_pm esp_timer
+    REQUIRES driver esp_driver_i2c esp_driver_i2s esp_lcd esp_lvgl_port button esp_adc esp_codec_dev esp_wifi nvs_flash esp_netif esp_event esp_pm esp_timer
 )

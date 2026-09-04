@@ -33,7 +33,7 @@ lv_display_t *bsp_lvgl_init(void) {
 
     lvgl_port_cfg_t pc = ESP_LVGL_PORT_INIT_CONFIG();
     // 中文回退字体 cmap 多,标题/列表排版比纯英文吃栈。5120 在中文主页会溢出黑屏。
-    pc.task_stack = 8192;
+    pc.task_stack = 12288;
     pc.task_max_sleep_ms = 10000;
     if (lvgl_port_init(&pc) != ESP_OK) {
         ESP_LOGE(TAG, "lvgl_port_init 失败");

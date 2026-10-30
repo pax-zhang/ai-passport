@@ -16,7 +16,7 @@ extern "C" {
 #define BUDDY_TOOL_HIST_NAME_MAX   11
 #define BUDDY_BRIGHTNESS_MIN       10
 #define BUDDY_BRIGHTNESS_MAX       100
-#define BUDDY_MASCOT_COUNT         16
+#define BUDDY_MASCOT_COUNT         24
 
 #define BUDDY_PAIR_REQ             0xE0
 #define BUDDY_UNPAIR               0xE1

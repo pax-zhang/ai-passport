@@ -43,6 +43,14 @@ extern "C" {
 #include "mascot_workbuddy.h"
 #include "mascot_hermes.h"
 #include "mascot_kimi.h"
+#include "mascot_grok.h"
+#include "mascot_cline.h"
+#include "mascot_pi.h"
+#include "mascot_openclaw.h"
+#include "mascot_kiro.h"
+#include "mascot_minimax.h"
+#include "mascot_aiwork.h"
+#include "mascot_mimo.h"
 
 static const char *TAG = "buddy";
 
@@ -103,6 +111,14 @@ static const Mascot s_mascots[BUDDY_MASCOT_COUNT] = {
     { workbuddySleep, workbuddyWork, workbuddyAlert, workbuddyQuestion, "WorkBuddy" },
     { hermesSleep, hermesWork, hermesAlert, hermesQuestion, "Hermes" },
     { kimiSleep, kimiWork, kimiAlert, kimiQuestion, "Kimi" },
+    { grokSleep, grokWork, grokAlert, grokQuestion, "Grok" },
+    { clineSleep, clineWork, clineAlert, clineQuestion, "Cline" },
+    { piSleep, piWork, piAlert, piQuestion, "Pi" },
+    { openclawSleep, openclawWork, openclawAlert, openclawQuestion, "OpenClaw" },
+    { kiroSleep, kiroWork, kiroAlert, kiroQuestion, "Kiro" },
+    { minimaxSleep, minimaxWork, minimaxAlert, minimaxQuestion, "MiniMax" },
+    { aiworkSleep, aiworkWork, aiworkAlert, aiworkQuestion, "AIWork" },
+    { mimoSleep, mimoWork, mimoAlert, mimoQuestion, "MiMo" },
 };
 
 static const char CODEISLAND_QR[CODEISLAND_QR_SIZE][CODEISLAND_QR_SIZE + 1] = {
